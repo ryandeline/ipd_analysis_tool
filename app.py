@@ -140,71 +140,113 @@ def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, ge
         vars_to_fetch.extend([f"{u_var}E", f"{u_var}M"])
     
     vars_to_fetch = list(set(vars_to_fetch))
-    var_str = ",".join(vars_to_fetch)
     
-    if counties:
-        county_str = ",".join(counties)
-        geo_clause = f"&for={fetch_geo_level}:*&in=state:{state_fips}&in=county:{county_str}"
-    else:
-        geo_clause = f"&for={fetch_geo_level}:*&in=state:{state_fips}"
-        
-    # Check if we are using S-tables (Subject) or B/C-tables (Detail)
-    is_subject = any(v.startswith('S') or v.startswith('DP') for v in vars_to_fetch)
-    endpoint = "acs/acs5/subject" if is_subject else "acs/acs5"
+    # CHUNK LOGIC: Split variables if too many (to prevent 400 URL too long error)
+    # The OA indicator for BG level can have ~50 variables. Census limit is ~50 variables per call generally safe.
+    # We will chunk into 40 variables max per call.
+    chunk_size = 40
+    chunks = [vars_to_fetch[i:i + chunk_size] for i in range(0, len(vars_to_fetch), chunk_size)]
     
-    call_url = f"{base_url}/{year}/{endpoint}?get={var_str},NAME{geo_clause}&key={api_key}"
+    partial_dfs = []
     
-    try:
-        r = requests.get(call_url)
-        r.raise_for_status()
-        data = r.json()
-        df = pd.DataFrame(data[1:], columns=data[0])
+    for i, chunk in enumerate(chunks):
+        var_str = ",".join(chunk)
         
-        # Convert all data columns to numeric
-        cols_to_numeric = [c for c in df.columns if c not in ['NAME', 'state', 'county', 'tract', 'block group']]
-        for col in cols_to_numeric:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        if counties:
+            county_str = ",".join(counties)
+            geo_clause = f"&for={fetch_geo_level}:*&in=state:{state_fips}&in=county:{county_str}"
+        else:
+            geo_clause = f"&for={fetch_geo_level}:*&in=state:{state_fips}"
             
-        # --- SUMMATION LOGIC ---
-        # 1. Sum Estimates
-        est_cols = [f"{c}E" for c in count_vars]
-        df[f"{indicator_code}_est"] = df[est_cols].sum(axis=1)
+        # Check if we are using S-tables (Subject) or B/C-tables (Detail)
+        is_subject = any(v.startswith('S') or v.startswith('DP') for v in chunk)
+        endpoint = "acs/acs5/subject" if is_subject else "acs/acs5"
         
-        # 2. Sum MOEs (sqrt(sum(moe^2)))
-        moe_cols = [f"{c}M" for c in count_vars]
-        df[f"{indicator_code}_est_moe"] = np.sqrt((df[moe_cols] ** 2).sum(axis=1))
+        call_url = f"{base_url}/{year}/{endpoint}?get={var_str},NAME{geo_clause}&key={api_key}"
         
-        # 3. Handle Universe
-        if u_var:
-            df[f"{indicator_code}_uni"] = df[f"{u_var}E"]
-            df[f"{indicator_code}_uni_moe"] = df[f"{u_var}M"]
-        
-        # --- INTERPOLATION LOGIC ---
-        if interpolate and geo_level == 'block group':
-            # We fetched Tract data, but we need to return it keyed for Block Groups.
-            # Strategy:
-            # 1. Create a key 'TRACT_ID' in this dataframe.
-            # 2. We will merge this later with the master DF (which is BG level) on the Tract ID part of the GEOID.
-            # However, fetch_single_indicator is expected to return a DF that can be merged on standard keys.
-            # Since the master DF is building up based on BG keys, returning a Tract DF here will cause a merge failure 
-            # unless we expand it to all BGs in that Tract.
+        try:
+            r = requests.get(call_url)
+            r.raise_for_status()
+            data = r.json()
+            df = pd.DataFrame(data[1:], columns=data[0])
             
-            # Since we don't have the list of all BGs here easily without fetching geometry or another var first,
-            # a cleaner way is to return the Tract DF but rename columns to indicate it's tract-level, 
-            # then merge it specially in the main loop. 
+            # Drop metadata cols if not the first chunk (to avoid duplicates when merging later)
+            # Actually, simpler to keep them and merge on them
+            partial_dfs.append(df)
             
-            # BUT, to keep the main loop simple (reduce/merge), we can rely on the fact that 
-            # 'state', 'county', 'tract' are columns in this DF. 
-            # The master DF (BG level) also has 'state', 'county', 'tract'. 
-            # If we merge on ['state', 'county', 'tract'], this Tract data will broadcast to all BGs in that tract.
-            # We just need to ensure we don't try to merge on 'block group' which doesn't exist in this DF.
-            pass 
+        except Exception as e:
+            print(f"Failed to fetch chunk {i} for {indicator_code}. URL: {call_url}. Error: {e}")
+            return pd.DataFrame()
 
-        return df
-    except Exception as e:
-        # Don't show warning to user immediately, let empty df handle it upstream
-        print(f"Failed to fetch {indicator_code}. URL: {call_url}. Error: {e}")
+    if not partial_dfs:
         return pd.DataFrame()
+    
+    # Merge chunks
+    if len(partial_dfs) > 1:
+        # Common keys to merge on
+        merge_keys = ['NAME', 'state', 'county', 'tract']
+        if fetch_geo_level == 'block group':
+             merge_keys.append('block group')
+             
+        df_final = reduce(lambda left, right: pd.merge(left, right, on=merge_keys, how='outer'), partial_dfs)
+    else:
+        df_final = partial_dfs[0]
+        
+    # Convert all data columns to numeric
+    cols_to_numeric = [c for c in df_final.columns if c not in ['NAME', 'state', 'county', 'tract', 'block group']]
+    for col in cols_to_numeric:
+        df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0)
+        
+    # --- SUMMATION LOGIC ---
+    # 1. Sum Estimates
+    # Ensure columns exist before summing (in case fetch failed partially)
+    available_est_cols = [f"{c}E" for c in count_vars if f"{c}E" in df_final.columns]
+    if available_est_cols:
+        df_final[f"{indicator_code}_est"] = df_final[available_est_cols].sum(axis=1)
+    else:
+        df_final[f"{indicator_code}_est"] = 0
+    
+    # 2. Sum MOEs (sqrt(sum(moe^2)))
+    available_moe_cols = [f"{c}M" for c in count_vars if f"{c}M" in df_final.columns]
+    if available_moe_cols:
+        df_final[f"{indicator_code}_est_moe"] = np.sqrt((df_final[available_moe_cols] ** 2).sum(axis=1))
+    else:
+        df_final[f"{indicator_code}_est_moe"] = 0
+    
+    # 3. Handle Universe
+    if u_var:
+        if f"{u_var}E" in df_final.columns:
+            df_final[f"{indicator_code}_uni"] = df_final[f"{u_var}E"]
+        else:
+            df_final[f"{indicator_code}_uni"] = 0 # Should probably handle error better
+            
+        if f"{u_var}M" in df_final.columns:
+            df_final[f"{indicator_code}_uni_moe"] = df_final[f"{u_var}M"]
+        else:
+            df_final[f"{indicator_code}_uni_moe"] = 0
+    
+    # --- INTERPOLATION LOGIC ---
+    if interpolate and geo_level == 'block group':
+        # We fetched Tract data, but we need to return it keyed for Block Groups.
+        # Strategy:
+        # 1. Create a key 'TRACT_ID' in this dataframe.
+        # 2. We will merge this later with the master DF (which is BG level) on the Tract ID part of the GEOID.
+        # However, fetch_single_indicator is expected to return a DF that can be merged on standard keys.
+        # Since the master DF is building up based on BG keys, returning a Tract DF here will cause a merge failure 
+        # unless we expand it to all BGs in that Tract.
+        
+        # Since we don't have the list of all BGs here easily without fetching geometry or another var first,
+        # a cleaner way is to return the Tract DF but rename columns to indicate it's tract-level, 
+        # then merge it specially in the main loop. 
+        
+        # BUT, to keep the main loop simple (reduce/merge), we can rely on the fact that 
+        # 'state', 'county', 'tract' are columns in this DF. 
+        # The master DF (BG level) also has 'state', 'county', 'tract'. 
+        # If we merge on ['state', 'county', 'tract'], this Tract data will broadcast to all BGs in that tract.
+        # We just need to ensure we don't try to merge on 'block group' which doesn't exist in this DF.
+        pass 
+
+    return df_final
 
 def patch_missing_columns(df):
     # This function is largely redundant with the new fetch logic 
@@ -309,11 +351,27 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     # 2. Merge all BG-level DFs first
     bg_merge_keys = ['state', 'county', 'tract', 'block group', 'NAME']
     # Use only keys present in all DFs to avoid errors if NAME format differs slightly
+    # Filter columns to only keep what is necessary for join
     common_keys = list(set.intersection(*(set(df.columns) for df in bg_dfs)))
-    # Ensure our critical keys are in the join list
     final_bg_keys = [k for k in ['state', 'county', 'tract', 'block group'] if k in common_keys]
     
-    df_master = reduce(lambda left, right: pd.merge(left, right, on=final_bg_keys, how='outer'), bg_dfs)
+    # Fix for MergeError: Drop duplicate columns or handle suffixes explicitly
+    # We will merge using suffixes to prevent crash, then clean up if needed, 
+    # but better is to ensure DFs don't have overlapping non-key columns.
+    # The DFs from fetch_single_indicator basically contain keys + specific indicator cols.
+    # The only overlap should be keys and potentially 'NAME'.
+    
+    # Explicitly deduplicate NAME column logic
+    for df in bg_dfs:
+        if 'NAME' in df.columns and 'NAME' not in final_bg_keys:
+             final_bg_keys.append('NAME')
+
+    # reduce using a lambda that is safe
+    try:
+        df_master = reduce(lambda left, right: pd.merge(left, right, on=final_bg_keys, how='outer'), bg_dfs)
+    except Exception as e:
+        st.error(f"Merge Error details: {e}")
+        st.stop()
     
     # 3. Merge Tract-level DFs (broadcast/interpolate)
     if tract_dfs:
@@ -398,8 +456,8 @@ if st.session_state.analysis_results:
 
     # GeoJSON Download Helper
     @st.cache_data
-    def convert_gdf_to_geojson(gdf):
-        return gdf.to_json()
+    def convert_gdf_to_geojson(_gdf):
+        return _gdf.to_json()
 
     with tabs[0]:
         if not final_gdf.empty:
