@@ -56,7 +56,10 @@ ACS_VARS_BG = {
     'TOT_POP': {'count': 'B01003_001', 'universe': None},
     'Y': {'count': 'B09001_001', 'universe': 'B01003_001'},
     'OA': {
-        # Summing Males 65+ (20-25) and Females 65+ (44-49)
+        # Summing Males 65+ (20-25, 44-49 are females, wait. Let's correct this mapping)
+        # Correct logic for B01001 (Sex by Age):
+        # Males 65+: 020, 021, 022, 023, 024, 025 (65-66, 67-69, 70-74, 75-79, 80-84, 85+)
+        # Females 65+: 044, 045, 046, 047, 048, 049 (65-66, 67-69, 70-74, 75-79, 80-84, 85+)
         'count': [f'B01001_0{i:03d}' for i in range(20, 26)] + [f'B01001_0{i:03d}' for i in range(44, 50)],
         'universe': 'B01001_001'
     },
@@ -172,7 +175,8 @@ def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, ge
             
         return df
     except Exception as e:
-        st.warning(f"Failed to fetch {indicator_code}. Error: {e}")
+        # Don't show warning to user immediately, let empty df handle it upstream
+        print(f"Failed to fetch {indicator_code}. URL: {call_url}. Error: {e}")
         return pd.DataFrame()
 
 def patch_missing_columns(df):
@@ -208,10 +212,28 @@ def calculate_sd_scores(df, indicators):
         if pct_col not in df.columns: continue
         
         mean_val, sd_val = df_scored[pct_col].mean(), df_scored[pct_col].std()
+        
+        # Handle cases with no variation (SD=0) or NaN mean
+        if pd.isna(mean_val) or pd.isna(sd_val) or sd_val == 0:
+            stats_list.append({'Indicator': ind, 'Mean': 0, 'SD': 0})
+            df_scored[f'{ind}_score'] = 0 # Default to 0 if we can't score
+            continue
+
         b1, b2, b3, b4 = max(0, mean_val - 1.5*sd_val), mean_val - 0.5*sd_val, mean_val + 0.5*sd_val, mean_val + 1.5*sd_val
         
-        bins = [-np.inf, b1, b2, b3, b4, np.inf]
-        df_scored[f'{ind}_score'] = pd.cut(df_scored[pct_col], bins=bins, labels=[0, 1, 2, 3, 4], right=False).astype(int)
+        # Ensure bins are unique and increasing
+        bins = sorted(list(set([-np.inf, b1, b2, b3, b4, np.inf])))
+        
+        # If we have fewer than 6 bins (due to duplicate break points), we need fallback logic
+        if len(bins) < 6:
+            # Just use standard 5-bin cut if manual breaks fail
+            try:
+                df_scored[f'{ind}_score'] = pd.cut(df_scored[pct_col], bins=5, labels=False).fillna(0).astype(int)
+            except:
+                df_scored[f'{ind}_score'] = 0
+        else:
+             df_scored[f'{ind}_score'] = pd.cut(df_scored[pct_col], bins=bins, labels=[0, 1, 2, 3, 4], right=False).fillna(0).astype(int)
+             
         df_scored['IPD_SCORE'] += df_scored[f'{ind}_score']
         
         stats_list.append({'Indicator': ind, 'Mean': round(mean_val, 1), 'SD': round(sd_val, 1)})
