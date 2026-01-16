@@ -387,11 +387,20 @@ if st.session_state.analysis_results:
     final_gdf, summary_stats = st.session_state.analysis_results
     st.title(f"IPD Analysis: {selected_state_name}")
     
-    if geo_level == 'block group':
-        st.info("ℹ️ Note: Disability (D) data is interpolated from Tract-level data for Block Group analysis.")
+    # Warning about Disability interpolation removed as requested.
 
     tabs = st.tabs(["🗺️ Map", "📊 Stats", "📋 Data"])
     
+    # CSV Download Helper
+    @st.cache_data
+    def convert_df(df):
+        return df.to_csv(index=False).encode('utf-8')
+
+    # GeoJSON Download Helper
+    @st.cache_data
+    def convert_gdf_to_geojson(gdf):
+        return gdf.to_json()
+
     with tabs[0]:
         if not final_gdf.empty:
             m = folium.Map(location=[final_gdf.geometry.centroid.y.mean(), final_gdf.geometry.centroid.x.mean()], zoom_start=9)
@@ -404,9 +413,31 @@ if st.session_state.analysis_results:
                 legend_name='IPD Score'
             ).add_to(m)
             st_folium(m, width=1100, height=600)
+            
+            # Download Button for GeoJSON (Map Data)
+            st.download_button(
+                label="📥 Download Map Data (GeoJSON)",
+                data=convert_gdf_to_geojson(final_gdf),
+                file_name=f"IPD_Map_Data_{selected_state_name}.geojson",
+                mime="application/json"
+            )
     
     with tabs[1]:
         st.dataframe(summary_stats, use_container_width=True)
+        # Download Button for Stats (CSV)
+        st.download_button(
+            label="📥 Download Statistics (CSV)",
+            data=convert_df(summary_stats),
+            file_name=f"IPD_Statistics_{selected_state_name}.csv",
+            mime="text/csv"
+        )
         
     with tabs[2]:
         st.dataframe(final_gdf.drop(columns='geometry'), use_container_width=True)
+        # Download Button for Raw Data (CSV)
+        st.download_button(
+            label="📥 Download Raw Data (CSV)",
+            data=convert_df(final_gdf.drop(columns='geometry')),
+            file_name=f"IPD_Raw_Data_{selected_state_name}.csv",
+            mime="text/csv"
+        )
