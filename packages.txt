@@ -5,3 +5,4 @@ gdal-bin
 proj-bin
 unixodbc-dev
 libodbc2
+libodbcinst2
