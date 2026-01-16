@@ -35,24 +35,6 @@ US_STATES_FIPS = {
     'West Virginia': '54', 'Wisconsin': '55', 'Wyoming': '56'
 }
 
-US_COUNTIES_FIPS = {
-    '11': [{'name': 'DC District', 'fips': '001'}], # Renamed to avoid duplicate with State name
-    '42': [
-        {'name': 'Philadelphia County', 'fips': '101'},
-        {'name': 'Allegheny County', 'fips': '003'},
-        {'name': 'Montgomery County', 'fips': '091'},
-        {'name': 'Bucks County', 'fips': '017'},
-        {'name': 'Delaware County', 'fips': '045'}
-    ],
-    '34': [
-        {'name': 'Bergen County', 'fips': '003'},
-        {'name': 'Middlesex County', 'fips': '023'},
-        {'name': 'Essex County', 'fips': '013'},
-        {'name': 'Hudson County', 'fips': '017'},
-        {'name': 'Monmouth County', 'fips': '025'}
-    ]
-}
-
 ACS_VARIABLES = {
     'TOT_POP': 'B01003_001',
     'Y': {'count': 'B09001_001', 'universe': 'B01003_001'},
@@ -67,6 +49,30 @@ ACS_VARIABLES = {
     'NC': {'count': 'B08201_002', 'universe': 'B08201_001'}
 }
 
+# --- Utility Functions ---
+
+@st.cache_data
+def get_all_counties(api_key, state_fips):
+    """Fetches the list of all counties for a specific state from Census API."""
+    if not api_key:
+        return []
+    url = f"https://api.census.gov/data/2022/acs/acs5?get=NAME&for=county:*&in=state:{state_fips}&key={api_key}"
+    try:
+        r = requests.get(url)
+        r.raise_for_status()
+        data = r.json()
+        # Data format: [["NAME", "state", "county"], ["Autauga County, Alabama", "01", "001"], ...]
+        counties = []
+        for row in data[1:]:
+            full_name = row[0]
+            # Clean name: "Autauga County, Alabama" -> "Autauga County"
+            display_name = full_name.split(',')[0]
+            counties.append({'name': display_name, 'fips': row[2]})
+        return sorted(counties, key=lambda x: x['name'])
+    except Exception as e:
+        st.sidebar.warning(f"Could not load counties: Enter a valid API key.")
+        return []
+
 @st.cache_data
 def get_census_geometry(year, state_fips, geo_level):
     base_url = "https://www2.census.gov/geo/tiger"
@@ -74,7 +80,6 @@ def get_census_geometry(year, state_fips, geo_level):
     file_code = "tract" if geo_level == 'tract' else "bg"
     url = f"{base_url}/TIGER{year}/{layer_name}/tl_{year}_{state_fips}_{file_code}.zip"
     try:
-        # Using pyogrio engine to bypass system GDAL issues
         gdf = gpd.read_file(url, engine='pyogrio')
         keep_cols = ['GEOID', 'geometry', 'ALAND', 'AWATER']
         return gdf[keep_cols]
@@ -82,7 +87,7 @@ def get_census_geometry(year, state_fips, geo_level):
         st.error(f"Error fetching geometry: {e}")
         return gpd.GeoDataFrame()
 
-def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, geo_level, api_key, progress_bar):
+def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, geo_level, api_key):
     base_url = "https://api.census.gov/data"
     c_var = codes.get('count')
     u_var = codes.get('universe')
@@ -165,11 +170,11 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     for i, (ind_code, codes) in enumerate(ACS_VARIABLES.items()):
         if ind_code == 'TOT_POP': continue
         status.write(f"Fetching {ind_code}...")
-        df_ind = fetch_single_indicator(ind_code, codes, year, state_fips, counties, geo_level, api_key, status)
+        df_ind = fetch_single_indicator(ind_code, codes, year, state_fips, counties, geo_level, api_key)
         if not df_ind.empty: indicator_dfs.append(df_ind)
 
     if not indicator_dfs:
-        st.error("No data fetched.")
+        st.error("No data fetched. Please check your API key.")
         st.stop()
     
     merge_keys = ['state', 'county', 'tract', 'NAME']
@@ -189,23 +194,25 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     status.update(label="Complete!", state="complete")
     return final_gdf, summary_stats
 
-# --- UI ---
+# --- UI and Session State ---
+if 'analysis_results' not in st.session_state:
+    st.session_state.analysis_results = None
+
 with st.sidebar:
     st.header("⚙️ Settings")
-    api_key = st.text_input("Census API Key", type="password")
+    api_key = st.text_input("Census API Key", type="password", help="Get one at api.census.gov/data/key_signup.html")
+    
     selected_state_name = st.selectbox("State", options=list(US_STATES_FIPS.keys()))
     selected_state_fips = US_STATES_FIPS[selected_state_name]
 
-    # Safety check: Get unique list of county names for the selected state
-    available_counties = US_COUNTIES_FIPS.get(selected_state_fips, [])
-    county_options = sorted(list(set(c['name'] for c in available_counties)))
-
-    # Refactored to use st.multiselect within the 'with' block to avoid naming conflicts
+    # Dynamically fetch counties for the selected state
+    available_counties = get_all_counties(api_key, selected_state_fips)
+    
     selected_county_names = st.multiselect(
         "Select Counties (optional)",
-        options=county_options,
+        options=[c['name'] for c in available_counties],
         key=f"county_select_{selected_state_fips}",
-        help="Leave blank to analyze all counties."
+        help="Leave blank to analyze all counties in the selected state."
     )
     selected_county_fips = [c['fips'] for c in available_counties if c['name'] in selected_county_names]
 
@@ -213,24 +220,44 @@ with st.sidebar:
     geo_level = st.selectbox("Level", ['tract', 'block group'])
     run_btn = st.button("🚀 Run Analysis", type="primary")
 
+# Execute Analysis
 if run_btn:
-    if not api_key: st.error("Key required.")
+    if not api_key: 
+        st.error("API Key is required to fetch data.")
     else:
-        final_gdf, summary_stats = run_analysis(api_key, selected_state_fips, selected_state_name, selected_county_fips, year, geo_level)
-        st.subheader("📊 Summary Statistics")
-        st.dataframe(summary_stats)
+        results = run_analysis(api_key, selected_state_fips, selected_state_name, selected_county_fips, year, geo_level)
+        st.session_state.analysis_results = results
+
+# Display Persistent Results
+if st.session_state.analysis_results:
+    final_gdf, summary_stats = st.session_state.analysis_results
+    
+    st.header(f"Results for {selected_state_name}")
+    
+    st.subheader("📊 Summary Statistics")
+    st.dataframe(summary_stats, use_container_width=True)
+    
+    if not final_gdf.empty:
+        st.subheader("🗺️ Disadvantage Score Map")
+        # Center map
+        avg_lat = final_gdf.geometry.centroid.y.mean()
+        avg_lon = final_gdf.geometry.centroid.x.mean()
         
-        if not final_gdf.empty:
-            st.subheader("🗺️ Map")
-            m = folium.Map(location=[final_gdf.geometry.centroid.y.mean(), final_gdf.geometry.centroid.x.mean()], zoom_start=9)
-            folium.Choropleth(
-                geo_data=final_gdf.to_json(),
-                data=final_gdf,
-                columns=['GEOID', 'IPD_SCORE'],
-                key_on='feature.properties.GEOID',
-                fill_color='YlOrRd',
-                legend_name='IPD Score'
-            ).add_to(m)
-            st_folium(m, width=1000, height=500)
-            st.subheader("📋 Data Preview")
-            st.dataframe(final_gdf.drop(columns='geometry'))
+        m = folium.Map(location=[avg_lat, avg_lon], zoom_start=9)
+        folium.Choropleth(
+            geo_data=final_gdf.to_json(),
+            data=final_gdf,
+            columns=['GEOID', 'IPD_SCORE'],
+            key_on='feature.properties.GEOID',
+            fill_color='YlOrRd',
+            legend_name='IPD Score (Higher = More Disadvantaged)'
+        ).add_to(m)
+        st_folium(m, width=1100, height=600)
+        
+        st.subheader("📋 Detailed Data Table")
+        # Don't show the geometry column in the table
+        st.dataframe(final_gdf.drop(columns='geometry'), use_container_width=True)
+    else:
+        st.warning("No geographic data matched the results. Try adjusting your county selection.")
+else:
+    st.info("Configure the sidebar and click 'Run Analysis' to see results here.")
