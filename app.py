@@ -36,7 +36,7 @@ US_STATES_FIPS = {
 }
 
 US_COUNTIES_FIPS = {
-    '11': [{'name': 'DC District', 'fips': '001'}], # Fixed: Changed name to avoid duplicate with State name
+    '11': [{'name': 'DC District', 'fips': '001'}], # Renamed to avoid duplicate with State name
     '42': [
         {'name': 'Philadelphia County', 'fips': '101'},
         {'name': 'Allegheny County', 'fips': '003'},
@@ -199,9 +199,12 @@ selected_state_fips = US_STATES_FIPS[selected_state_name]
 available_counties = US_COUNTIES_FIPS.get(selected_state_fips, [])
 county_options = sorted(list(set(c['name'] for c in available_counties)))
 
+# FIX: Added a unique 'key' to the multiselect to force it to reset when the state changes.
+# This prevents the StreamlitAPIException related to stale options or duplicate names.
 selected_county_names = st.sidebar.multoselect(
     "Select Counties (optional)",
     options=county_options,
+    key=f"county_select_{selected_state_fips}",
     help="Leave blank to analyze all counties."
 )
 selected_county_fips = [c['fips'] for c in available_counties if c['name'] in selected_county_names]
