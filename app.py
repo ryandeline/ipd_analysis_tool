@@ -61,16 +61,13 @@ def get_all_counties(api_key, state_fips):
         r = requests.get(url)
         r.raise_for_status()
         data = r.json()
-        # Data format: [["NAME", "state", "county"], ["Autauga County, Alabama", "01", "001"], ...]
         counties = []
         for row in data[1:]:
             full_name = row[0]
-            # Clean name: "Autauga County, Alabama" -> "Autauga County"
             display_name = full_name.split(',')[0]
             counties.append({'name': display_name, 'fips': row[2]})
         return sorted(counties, key=lambda x: x['name'])
-    except Exception as e:
-        st.sidebar.warning(f"Could not load counties: Enter a valid API key.")
+    except Exception:
         return []
 
 @st.cache_data
@@ -199,13 +196,28 @@ if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
 
 with st.sidebar:
-    st.header("⚙️ Settings")
-    api_key = st.text_input("Census API Key", type="password", help="Get one at api.census.gov/data/key_signup.html")
+    st.header("⚙️ Configuration")
     
-    selected_state_name = st.selectbox("State", options=list(US_STATES_FIPS.keys()))
+    # Secure API Key Handling
+    # 1. Tries to find CENSUS_API_KEY in Streamlit Secrets
+    # 2. Defaults to your test key if secrets aren't set up yet
+    # REMINDER: Remove the hardcoded fallback 'dfb115...' before going live.
+    api_key_placeholder = st.secrets.get("CENSUS_API_KEY", "dfb115d4ff6b35a8ccc01892add4258ba7b48eaf")
+    api_key = st.text_input("Census API Key", value=api_key_placeholder, type="password")
+    
+    with st.expander("🔑 How to get an API Key"):
+        st.markdown("""
+        1. Visit the [Census API Key Signup page](https://api.census.gov/data/key_signup.html).
+        2. Enter your Organization Name and Email.
+        3. You will receive an email with your key.
+        4. Copy and paste it here!
+        """)
+    
+    st.divider()
+    
+    selected_state_name = st.selectbox("Select State", options=list(US_STATES_FIPS.keys()))
     selected_state_fips = US_STATES_FIPS[selected_state_name]
 
-    # Dynamically fetch counties for the selected state
     available_counties = get_all_counties(api_key, selected_state_fips)
     
     selected_county_names = st.multiselect(
@@ -216,14 +228,16 @@ with st.sidebar:
     )
     selected_county_fips = [c['fips'] for c in available_counties if c['name'] in selected_county_names]
 
-    year = st.selectbox("Year", [2022, 2021, 2020])
-    geo_level = st.selectbox("Level", ['tract', 'block group'])
-    run_btn = st.button("🚀 Run Analysis", type="primary")
+    year = st.selectbox("ACS 5-Year Data", [2022, 2021, 2020])
+    geo_level = st.selectbox("Geography Level", ['tract', 'block group'])
+    
+    st.divider()
+    run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
 
 # Execute Analysis
 if run_btn:
     if not api_key: 
-        st.error("API Key is required to fetch data.")
+        st.error("A Census API Key is required to run this analysis.")
     else:
         results = run_analysis(api_key, selected_state_fips, selected_state_name, selected_county_fips, year, geo_level)
         st.session_state.analysis_results = results
@@ -231,33 +245,35 @@ if run_btn:
 # Display Persistent Results
 if st.session_state.analysis_results:
     final_gdf, summary_stats = st.session_state.analysis_results
+    st.title(f"IPD Analysis: {selected_state_name}")
     
-    st.header(f"Results for {selected_state_name}")
+    tabs = st.tabs(["🗺️ Visual Map", "📊 Summary Stats", "📋 Raw Data"])
     
-    st.subheader("📊 Summary Statistics")
-    st.dataframe(summary_stats, use_container_width=True)
-    
-    if not final_gdf.empty:
-        st.subheader("🗺️ Disadvantage Score Map")
-        # Center map
-        avg_lat = final_gdf.geometry.centroid.y.mean()
-        avg_lon = final_gdf.geometry.centroid.x.mean()
+    with tabs[0]:
+        if not final_gdf.empty:
+            avg_lat = final_gdf.geometry.centroid.y.mean()
+            avg_lon = final_gdf.geometry.centroid.x.mean()
+            
+            m = folium.Map(location=[avg_lat, avg_lon], zoom_start=9)
+            folium.Choropleth(
+                geo_data=final_gdf.to_json(),
+                data=final_gdf,
+                columns=['GEOID', 'IPD_SCORE'],
+                key_on='feature.properties.GEOID',
+                fill_color='YlOrRd',
+                legend_name='IPD Composite Score (Higher = More Disadvantaged)'
+            ).add_to(m)
+            st_folium(m, width=1100, height=600)
+        else:
+            st.warning("No geographic data matched your criteria. Check your county filters.")
+            
+    with tabs[1]:
+        st.subheader("Indicator Statistics")
+        st.dataframe(summary_stats, use_container_width=True)
+        st.info("The IPD Score is calculated using standard deviation breaks across the 10 demographic indicators.")
         
-        m = folium.Map(location=[avg_lat, avg_lon], zoom_start=9)
-        folium.Choropleth(
-            geo_data=final_gdf.to_json(),
-            data=final_gdf,
-            columns=['GEOID', 'IPD_SCORE'],
-            key_on='feature.properties.GEOID',
-            fill_color='YlOrRd',
-            legend_name='IPD Score (Higher = More Disadvantaged)'
-        ).add_to(m)
-        st_folium(m, width=1100, height=600)
-        
-        st.subheader("📋 Detailed Data Table")
-        # Don't show the geometry column in the table
+    with tabs[2]:
+        st.subheader("Export Data")
         st.dataframe(final_gdf.drop(columns='geometry'), use_container_width=True)
-    else:
-        st.warning("No geographic data matched the results. Try adjusting your county selection.")
 else:
-    st.info("Configure the sidebar and click 'Run Analysis' to see results here.")
+    st.info("👋 Welcome! Use the sidebar to enter your API key, select a state, and click 'Run Analysis'.")
