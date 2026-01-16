@@ -461,7 +461,16 @@ if st.session_state.analysis_results:
 
     with tabs[0]:
         if not final_gdf.empty:
-            m = folium.Map(location=[final_gdf.geometry.centroid.y.mean(), final_gdf.geometry.centroid.x.mean()], zoom_start=9)
+            # Re-project to EPSG:4326 to ensure lat/lon compatibility for mapping (usually comes as NAD83/EPSG:4269)
+            if final_gdf.crs and final_gdf.crs != 'EPSG:4326':
+                final_gdf = final_gdf.to_crs('EPSG:4326')
+            
+            # Determine bounds to zoom the map
+            min_lon, min_lat, max_lon, max_lat = final_gdf.total_bounds
+            
+            m = folium.Map(location=[final_gdf.geometry.centroid.y.mean(), final_gdf.geometry.centroid.x.mean()])
+            m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
+            
             folium.Choropleth(
                 geo_data=final_gdf.to_json(),
                 data=final_gdf,
