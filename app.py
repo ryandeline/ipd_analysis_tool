@@ -35,8 +35,9 @@ US_STATES_FIPS = {
     'West Virginia': '54', 'Wisconsin': '55', 'Wyoming': '56'
 }
 
-ACS_VARIABLES = {
-    'TOT_POP': 'B01003_001',
+# --- TRACT LEVEL VARIABLES (Original S-Tables) ---
+ACS_VARS_TRACT = {
+    'TOT_POP': {'count': 'B01003_001', 'universe': None},
     'Y': {'count': 'B09001_001', 'universe': 'B01003_001'},
     'OA': {'count': 'S0101_C01_030', 'universe': 'S0101_C01_001'},
     'F': {'count': 'S0101_C05_001', 'universe': 'S0101_C01_001'},
@@ -49,13 +50,39 @@ ACS_VARIABLES = {
     'NC': {'count': 'B08201_002', 'universe': 'B08201_001'}
 }
 
+# --- BLOCK GROUP LEVEL VARIABLES (Substituted B/C-Tables) ---
+# Note: Disability (D) is unavailable at Block Group level.
+ACS_VARS_BG = {
+    'TOT_POP': {'count': 'B01003_001', 'universe': None},
+    'Y': {'count': 'B09001_001', 'universe': 'B01003_001'},
+    'OA': {
+        # Summing Males 65+ (20-25) and Females 65+ (44-49)
+        'count': [f'B01001_0{i:03d}' for i in range(20, 26)] + [f'B01001_0{i:03d}' for i in range(44, 50)],
+        'universe': 'B01001_001'
+    },
+    'F': {'count': 'B01001_026', 'universe': 'B01001_001'},
+    'RM': {'count': 'B02001_002', 'universe': 'B02001_001', 'calc_type': 'subtract'},
+    'EM': {'count': 'B03002_012', 'universe': 'B03002_001'},
+    'FB': {'count': 'B05012_003', 'universe': 'B05012_001'},
+    # LEP Proxy: Limited English Speaking Households
+    'LEP': {
+        'count': ['C16002_004', 'C16002_007', 'C16002_010', 'C16002_013'],
+        'universe': 'C16002_001'
+    },
+    # Disability omitted (Not available)
+    # Low Income Proxy: Ratio of Income to Poverty < 2.00
+    'LI': {
+        'count': ['C17002_002', 'C17002_003', 'C17002_004', 'C17002_005', 'C17002_006', 'C17002_007'],
+        'universe': 'C17002_001'
+    },
+    'NC': {'count': 'B08201_002', 'universe': 'B08201_001'}
+}
+
 # --- Utility Functions ---
 
 @st.cache_data
 def get_all_counties(api_key, state_fips):
-    """Fetches the list of all counties for a specific state from Census API."""
-    if not api_key:
-        return []
+    if not api_key: return []
     url = f"https://api.census.gov/data/2022/acs/acs5?get=NAME&for=county:*&in=state:{state_fips}&key={api_key}"
     try:
         r = requests.get(url)
@@ -86,59 +113,89 @@ def get_census_geometry(year, state_fips, geo_level):
 
 def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, geo_level, api_key):
     base_url = "https://api.census.gov/data"
-    c_var = codes.get('count')
+    
+    # Handle 'count' being a list (for summation) or a string
+    raw_counts = codes.get('count')
+    if isinstance(raw_counts, str):
+        count_vars = [raw_counts]
+    else:
+        count_vars = raw_counts # It's already a list
+        
     u_var = codes.get('universe')
-    vars_to_fetch = list(set([f"{c_var}E", f"{c_var}M", f"{u_var}E", f"{u_var}M"]))
+    
+    # Flatten vars to fetch
+    vars_to_fetch = []
+    for c in count_vars:
+        vars_to_fetch.extend([f"{c}E", f"{c}M"])
+    if u_var:
+        vars_to_fetch.extend([f"{u_var}E", f"{u_var}M"])
+    
+    vars_to_fetch = list(set(vars_to_fetch))
     var_str = ",".join(vars_to_fetch)
+    
     if counties:
         county_str = ",".join(counties)
         geo_clause = f"&for={geo_level}:*&in=state:{state_fips}&in=county:{county_str}"
     else:
         geo_clause = f"&for={geo_level}:*&in=state:{state_fips}"
+        
+    # Check if we are using S-tables (Subject) or B/C-tables (Detail)
     is_subject = any(v.startswith('S') or v.startswith('DP') for v in vars_to_fetch)
     endpoint = "acs/acs5/subject" if is_subject else "acs/acs5"
+    
     call_url = f"{base_url}/{year}/{endpoint}?get={var_str},NAME{geo_clause}&key={api_key}"
+    
     try:
         r = requests.get(call_url)
         r.raise_for_status()
         data = r.json()
         df = pd.DataFrame(data[1:], columns=data[0])
-        for col in df.columns:
-            if col not in ['NAME', 'state', 'county', 'tract', 'block group']:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # Convert all data columns to numeric
+        cols_to_numeric = [c for c in df.columns if c not in ['NAME', 'state', 'county', 'tract', 'block group']]
+        for col in cols_to_numeric:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            
+        # --- SUMMATION LOGIC ---
+        # 1. Sum Estimates
+        est_cols = [f"{c}E" for c in count_vars]
+        df[f"{indicator_code}_est"] = df[est_cols].sum(axis=1)
+        
+        # 2. Sum MOEs (sqrt(sum(moe^2)))
+        moe_cols = [f"{c}M" for c in count_vars]
+        df[f"{indicator_code}_est_moe"] = np.sqrt((df[moe_cols] ** 2).sum(axis=1))
+        
+        # 3. Handle Universe
+        if u_var:
+            df[f"{indicator_code}_uni"] = df[f"{u_var}E"]
+            df[f"{indicator_code}_uni_moe"] = df[f"{u_var}M"]
+            
         return df
     except Exception as e:
         st.warning(f"Failed to fetch {indicator_code}. Error: {e}")
         return pd.DataFrame()
 
 def patch_missing_columns(df):
-    rename_map = {
-        'S0101_C01_030E': 'OA_est', 'S0101_C01_030M': 'OA_est_moe', 'S0101_C05_001E': 'F_est',
-        'S0101_C05_001M': 'F_est_moe', 'S1601_C01_001E': 'LEP_uni', 'S1601_C05_001E': 'LEP_est',
-        'S1810_C01_001E': 'D_uni', 'S1810_C02_001E': 'D_est', 'S1701_C01_001E': 'LI_uni', 
-        'S1701_C01_042E': 'LI_est', 'B09001_001E': 'Y_est', 'B01003_001E': 'Y_uni',
-        'B02001_002E': 'RM_est', 'B02001_001E': 'RM_uni', 'B03002_012E': 'EM_est',
-        'B03002_001E': 'EM_uni', 'B05012_003E': 'FB_est', 'B05012_001E': 'FB_uni',
-        'B08201_002E': 'NC_est', 'B08201_001E': 'NC_uni',
-    }
-    for raw_col, new_col in rename_map.items():
-        if raw_col in df.columns:
-            df.rename(columns={raw_col: new_col}, inplace=True)
-    
-    source_col = next((c for c in ['S0101_C01_001E', 'S0101_C01_001E_x'] if c in df.columns), None)
-    if source_col:
-        df['OA_uni'] = df[source_col]
-        df['F_uni'] = df[source_col]
+    # This function is largely redundant with the new fetch logic 
+    # but kept for safety with legacy column names if any slip through
     return df
 
-def process_indicators(df):
-    if 'RM_uni' in df.columns and 'RM_est' in df.columns:
-        df['RM_est'] = df['RM_uni'] - df['RM_est']
+def process_indicators(df, active_indicators):
+    # Racial Minority Calculation: Universe - White Alone
+    if 'RM' in active_indicators and 'RM_uni' in df.columns and 'RM_est' in df.columns:
+        # Currently RM_est is "White Alone". We want "Non-White".
+        # Non-White = Total - White Alone
+        df['RM_est_original'] = df['RM_est'] # store white alone for verification if needed
+        df['RM_est'] = df['RM_uni'] - df['RM_est_original']
+        
+        # MOE for subtraction: sqrt(moe1^2 + moe2^2)
+        if 'RM_uni_moe' in df.columns and 'RM_est_moe' in df.columns:
+            df['RM_est_moe'] = np.sqrt(df['RM_uni_moe']**2 + df['RM_est_moe']**2)
     
-    indicators = ['Y', 'OA', 'F', 'RM', 'EM', 'FB', 'LEP', 'D', 'LI', 'NC']
-    for ind in indicators:
+    for ind in active_indicators:
         if f'{ind}_est' in df.columns and f'{ind}_uni' in df.columns:
             df[f'{ind}_pct'] = np.where(df[f'{ind}_uni'] > 0, (df[f'{ind}_est'] / df[f'{ind}_uni']) * 100, 0).round(1)
+            
     return df
 
 def calculate_sd_scores(df, indicators):
@@ -162,10 +219,20 @@ def calculate_sd_scores(df, indicators):
 
 def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     status = st.status(f"Starting analysis for {state_name}...", expanded=True)
+    
+    # Select variable set based on geography
+    if geo_level == 'block group':
+        VARIABLES = ACS_VARS_BG
+        # Filter out 'TOT_POP' and keys that don't exist in BG (like 'D')
+        active_inds = [k for k in VARIABLES.keys() if k != 'TOT_POP']
+    else:
+        VARIABLES = ACS_VARS_TRACT
+        active_inds = [k for k in VARIABLES.keys() if k != 'TOT_POP']
+
     indicator_dfs = []
     
-    for i, (ind_code, codes) in enumerate(ACS_VARIABLES.items()):
-        if ind_code == 'TOT_POP': continue
+    for i, ind_code in enumerate(active_inds):
+        codes = VARIABLES[ind_code]
         status.write(f"Fetching {ind_code}...")
         df_ind = fetch_single_indicator(ind_code, codes, year, state_fips, counties, geo_level, api_key)
         if not df_ind.empty: indicator_dfs.append(df_ind)
@@ -180,9 +247,8 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     df_master['GEOID'] = df_master['state'] + df_master['county'] + df_master['tract']
     if geo_level == 'block group': df_master['GEOID'] += df_master['block group']
 
-    df_master = patch_missing_columns(df_master)
-    df_master = process_indicators(df_master)
-    full_df_scored, summary_stats = calculate_sd_scores(df_master, ['Y', 'OA', 'F', 'RM', 'EM', 'FB', 'LEP', 'D', 'LI', 'NC'])
+    df_master = process_indicators(df_master, active_inds)
+    full_df_scored, summary_stats = calculate_sd_scores(df_master, active_inds)
 
     gdf_geom = get_census_geometry(year, state_fips, geo_level)
     if counties: gdf_geom = gdf_geom[gdf_geom['GEOID'].str[2:5].isin(counties)]
@@ -197,21 +263,11 @@ if 'analysis_results' not in st.session_state:
 
 with st.sidebar:
     st.header("⚙️ Configuration")
-    
-    # Secure API Key Handling
-    # 1. Tries to find CENSUS_API_KEY in Streamlit Secrets
-    # 2. Defaults to your test key if secrets aren't set up yet
-    # REMINDER: Remove the hardcoded fallback 'dfb115...' before going live.
     api_key_placeholder = st.secrets.get("CENSUS_API_KEY", "dfb115d4ff6b35a8ccc01892add4258ba7b48eaf")
     api_key = st.text_input("Census API Key", value=api_key_placeholder, type="password")
     
     with st.expander("🔑 How to get an API Key"):
-        st.markdown("""
-        1. Visit the [Census API Key Signup page](https://api.census.gov/data/key_signup.html).
-        2. Enter your Organization Name and Email.
-        3. You will receive an email with your key.
-        4. Copy and paste it here!
-        """)
+        st.markdown("[Get Key Here](https://api.census.gov/data/key_signup.html)")
     
     st.divider()
     
@@ -224,62 +280,49 @@ with st.sidebar:
         "Select Counties (optional)",
         options=[c['name'] for c in available_counties],
         key=f"county_select_{selected_state_fips}",
-        help="Leave blank to analyze all counties in the selected state."
+        help="Leave blank to analyze all counties."
     )
     selected_county_fips = [c['fips'] for c in available_counties if c['name'] in selected_county_names]
 
     year = st.selectbox("ACS 5-Year Data", [2022, 2021, 2020])
     
-    # UPDATE: Restricted to 'tract' only because API fails for Block Groups on Subject Tables (S*)
-    geo_level = st.selectbox(
-        "Geography Level", 
-        ['tract'], 
-        help="Block Group analysis is unavailable because critical indicators (Disability, LEP, etc.) rely on Census Subject Tables (S-series), which are only published down to the Tract level."
-    )
+    # Updated: Now supports Block Group
+    geo_level = st.selectbox("Geography Level", ['block group', 'tract'])
     
     st.divider()
     run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
 
-# Execute Analysis
 if run_btn:
     if not api_key: 
-        st.error("A Census API Key is required to run this analysis.")
+        st.error("Census API Key required.")
     else:
         results = run_analysis(api_key, selected_state_fips, selected_state_name, selected_county_fips, year, geo_level)
         st.session_state.analysis_results = results
 
-# Display Persistent Results
 if st.session_state.analysis_results:
     final_gdf, summary_stats = st.session_state.analysis_results
     st.title(f"IPD Analysis: {selected_state_name}")
     
-    tabs = st.tabs(["🗺️ Visual Map", "📊 Summary Stats", "📋 Raw Data"])
+    if geo_level == 'block group':
+        st.warning("⚠️ Note: Disability (D) data is excluded from Block Group analysis as it is not available from the Census at this level.")
+
+    tabs = st.tabs(["🗺️ Map", "📊 Stats", "📋 Data"])
     
     with tabs[0]:
         if not final_gdf.empty:
-            avg_lat = final_gdf.geometry.centroid.y.mean()
-            avg_lon = final_gdf.geometry.centroid.x.mean()
-            
-            m = folium.Map(location=[avg_lat, avg_lon], zoom_start=9)
+            m = folium.Map(location=[final_gdf.geometry.centroid.y.mean(), final_gdf.geometry.centroid.x.mean()], zoom_start=9)
             folium.Choropleth(
                 geo_data=final_gdf.to_json(),
                 data=final_gdf,
                 columns=['GEOID', 'IPD_SCORE'],
                 key_on='feature.properties.GEOID',
                 fill_color='YlOrRd',
-                legend_name='IPD Composite Score (Higher = More Disadvantaged)'
+                legend_name='IPD Score'
             ).add_to(m)
             st_folium(m, width=1100, height=600)
-        else:
-            st.warning("No geographic data matched your criteria. Check your county filters.")
-            
+    
     with tabs[1]:
-        st.subheader("Indicator Statistics")
         st.dataframe(summary_stats, use_container_width=True)
-        st.info("The IPD Score is calculated using standard deviation breaks across the 10 demographic indicators.")
         
     with tabs[2]:
-        st.subheader("Export Data")
         st.dataframe(final_gdf.drop(columns='geometry'), use_container_width=True)
-else:
-    st.info("👋 Welcome! Use the sidebar to enter your API key, select a state, and click 'Run Analysis'.")
