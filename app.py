@@ -190,28 +190,28 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     return final_gdf, summary_stats
 
 # --- UI ---
-st.sidebar.header("⚙️ Settings")
-api_key = st.sidebar.text_input("Census API Key", type="password")
-selected_state_name = st.sidebar.selectbox("State", options=list(US_STATES_FIPS.keys()))
-selected_state_fips = US_STATES_FIPS[selected_state_name]
+with st.sidebar:
+    st.header("⚙️ Settings")
+    api_key = st.text_input("Census API Key", type="password")
+    selected_state_name = st.selectbox("State", options=list(US_STATES_FIPS.keys()))
+    selected_state_fips = US_STATES_FIPS[selected_state_name]
 
-# Safety check: Get unique list of county names for the selected state
-available_counties = US_COUNTIES_FIPS.get(selected_state_fips, [])
-county_options = sorted(list(set(c['name'] for c in available_counties)))
+    # Safety check: Get unique list of county names for the selected state
+    available_counties = US_COUNTIES_FIPS.get(selected_state_fips, [])
+    county_options = sorted(list(set(c['name'] for c in available_counties)))
 
-# FIX: Added a unique 'key' to the multiselect to force it to reset when the state changes.
-# This prevents the StreamlitAPIException related to stale options or duplicate names.
-selected_county_names = st.sidebar.multoselect(
-    "Select Counties (optional)",
-    options=county_options,
-    key=f"county_select_{selected_state_fips}",
-    help="Leave blank to analyze all counties."
-)
-selected_county_fips = [c['fips'] for c in available_counties if c['name'] in selected_county_names]
+    # Refactored to use st.multiselect within the 'with' block to avoid naming conflicts
+    selected_county_names = st.multiselect(
+        "Select Counties (optional)",
+        options=county_options,
+        key=f"county_select_{selected_state_fips}",
+        help="Leave blank to analyze all counties."
+    )
+    selected_county_fips = [c['fips'] for c in available_counties if c['name'] in selected_county_names]
 
-year = st.sidebar.selectbox("Year", [2022, 2021, 2020])
-geo_level = st.sidebar.selectbox("Level", ['tract', 'block group'])
-run_btn = st.sidebar.button("🚀 Run Analysis", type="primary")
+    year = st.selectbox("Year", [2022, 2021, 2020])
+    geo_level = st.selectbox("Level", ['tract', 'block group'])
+    run_btn = st.button("🚀 Run Analysis", type="primary")
 
 if run_btn:
     if not api_key: st.error("Key required.")
