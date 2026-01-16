@@ -229,7 +229,13 @@ with st.sidebar:
     selected_county_fips = [c['fips'] for c in available_counties if c['name'] in selected_county_names]
 
     year = st.selectbox("ACS 5-Year Data", [2022, 2021, 2020])
-    geo_level = st.selectbox("Geography Level", ['tract', 'block group'])
+    
+    # UPDATE: Restricted to 'tract' only because API fails for Block Groups on Subject Tables (S*)
+    geo_level = st.selectbox(
+        "Geography Level", 
+        ['tract'], 
+        help="Block Group analysis is unavailable because critical indicators (Disability, LEP, etc.) rely on Census Subject Tables (S-series), which are only published down to the Tract level."
+    )
     
     st.divider()
     run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
