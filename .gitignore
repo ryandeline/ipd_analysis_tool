@@ -22,3 +22,6 @@ build/
 # Windows specifics
 Thumbs.db
 Desktop.ini
+.devcontainer 
+census_tables/ 
+output/ 
