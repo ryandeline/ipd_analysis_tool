@@ -1,6 +1,6 @@
 # **otbx\_ipd: Indicators of Potential Disadvantage Analysis**
 
-**otbx\_ipd** is a Python-based analytical engine designed to identify and locate populations of interest under federal equity mandates (Title VI, Environmental Justice) and strategic market analysis.
+**otbx\_ipd** is a Python based analytical engine designed to identify and locate populations of interest under federal equity mandates (Title VI, Environmental Justice) and strategic market analysis.
 
 It automates the extraction of **American Community Survey (ACS) 5-Year Estimates**, calculates statistical concentrations using a **Standard Deviation (SD) Scoring** methodology, and exports robust geospatial datasets for planning and intelligence.
 
