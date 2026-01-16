@@ -51,12 +51,10 @@ ACS_VARS_TRACT = {
 }
 
 # --- BLOCK GROUP LEVEL VARIABLES (Substituted B/C-Tables) ---
-# Note: Disability (D) is unavailable at Block Group level.
 ACS_VARS_BG = {
     'TOT_POP': {'count': 'B01003_001', 'universe': None},
     'Y': {'count': 'B09001_001', 'universe': 'B01003_001'},
     'OA': {
-        # Summing Males 65+ (20-25, 44-49 are females, wait. Let's correct this mapping)
         # Correct logic for B01001 (Sex by Age):
         # Males 65+: 020, 021, 022, 023, 024, 025 (65-66, 67-69, 70-74, 75-79, 80-84, 85+)
         # Females 65+: 044, 045, 046, 047, 048, 049 (65-66, 67-69, 70-74, 75-79, 80-84, 85+)
@@ -72,7 +70,9 @@ ACS_VARS_BG = {
         'count': ['C16002_004', 'C16002_007', 'C16002_010', 'C16002_013'],
         'universe': 'C16002_001'
     },
-    # Disability omitted (Not available)
+    # Disability (D) is unavailable at BG level. 
+    # We use the Tract-level variable here and will interpolate it in fetch_single_indicator.
+    'D': {'count': 'S1810_C02_001', 'universe': 'S1810_C01_001', 'interpolate': True},
     # Low Income Proxy: Ratio of Income to Poverty < 2.00
     'LI': {
         'count': ['C17002_002', 'C17002_003', 'C17002_004', 'C17002_005', 'C17002_006', 'C17002_007'],
@@ -117,6 +117,12 @@ def get_census_geometry(year, state_fips, geo_level):
 def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, geo_level, api_key):
     base_url = "https://api.census.gov/data"
     
+    # Check for interpolation flag (used for Disability at Block Group level)
+    interpolate = codes.get('interpolate', False)
+    
+    # If interpolation is needed, force fetch at Tract level
+    fetch_geo_level = 'tract' if interpolate and geo_level == 'block group' else geo_level
+
     # Handle 'count' being a list (for summation) or a string
     raw_counts = codes.get('count')
     if isinstance(raw_counts, str):
@@ -138,9 +144,9 @@ def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, ge
     
     if counties:
         county_str = ",".join(counties)
-        geo_clause = f"&for={geo_level}:*&in=state:{state_fips}&in=county:{county_str}"
+        geo_clause = f"&for={fetch_geo_level}:*&in=state:{state_fips}&in=county:{county_str}"
     else:
-        geo_clause = f"&for={geo_level}:*&in=state:{state_fips}"
+        geo_clause = f"&for={fetch_geo_level}:*&in=state:{state_fips}"
         
     # Check if we are using S-tables (Subject) or B/C-tables (Detail)
     is_subject = any(v.startswith('S') or v.startswith('DP') for v in vars_to_fetch)
@@ -172,7 +178,28 @@ def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, ge
         if u_var:
             df[f"{indicator_code}_uni"] = df[f"{u_var}E"]
             df[f"{indicator_code}_uni_moe"] = df[f"{u_var}M"]
+        
+        # --- INTERPOLATION LOGIC ---
+        if interpolate and geo_level == 'block group':
+            # We fetched Tract data, but we need to return it keyed for Block Groups.
+            # Strategy:
+            # 1. Create a key 'TRACT_ID' in this dataframe.
+            # 2. We will merge this later with the master DF (which is BG level) on the Tract ID part of the GEOID.
+            # However, fetch_single_indicator is expected to return a DF that can be merged on standard keys.
+            # Since the master DF is building up based on BG keys, returning a Tract DF here will cause a merge failure 
+            # unless we expand it to all BGs in that Tract.
             
+            # Since we don't have the list of all BGs here easily without fetching geometry or another var first,
+            # a cleaner way is to return the Tract DF but rename columns to indicate it's tract-level, 
+            # then merge it specially in the main loop. 
+            
+            # BUT, to keep the main loop simple (reduce/merge), we can rely on the fact that 
+            # 'state', 'county', 'tract' are columns in this DF. 
+            # The master DF (BG level) also has 'state', 'county', 'tract'. 
+            # If we merge on ['state', 'county', 'tract'], this Tract data will broadcast to all BGs in that tract.
+            # We just need to ensure we don't try to merge on 'block group' which doesn't exist in this DF.
+            pass 
+
         return df
     except Exception as e:
         # Don't show warning to user immediately, let empty df handle it upstream
@@ -245,7 +272,7 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     # Select variable set based on geography
     if geo_level == 'block group':
         VARIABLES = ACS_VARS_BG
-        # Filter out 'TOT_POP' and keys that don't exist in BG (like 'D')
+        # Filter out 'TOT_POP'
         active_inds = [k for k in VARIABLES.keys() if k != 'TOT_POP']
     else:
         VARIABLES = ACS_VARS_TRACT
@@ -263,11 +290,46 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
         st.error("No data fetched. Please check your API key.")
         st.stop()
     
-    merge_keys = ['state', 'county', 'tract', 'NAME']
-    if geo_level == 'block group': merge_keys.append('block group')
-    df_master = reduce(lambda left, right: pd.merge(left, right, on=merge_keys, how='outer'), indicator_dfs)
-    df_master['GEOID'] = df_master['state'] + df_master['county'] + df_master['tract']
-    if geo_level == 'block group': df_master['GEOID'] += df_master['block group']
+    # Merging Logic Update:
+    # We need to handle mixed granularity (some DFs are BG, some are Tract if interpolated)
+    # The 'reduce' function assumes all DFs share the same join keys.
+    # We must ensure that fetching function returns consistent keys or we handle it here.
+    
+    # Since fetch_single_indicator returns 'state', 'county', 'tract' for both levels,
+    # but 'block group' only for BG level requests, we need a smart merge.
+    
+    # 1. Separate BG-level DFs from Tract-level DFs (interpolated ones)
+    bg_dfs = [df for df in indicator_dfs if 'block group' in df.columns]
+    tract_dfs = [df for df in indicator_dfs if 'block group' not in df.columns]
+    
+    if not bg_dfs:
+        st.error("Critical Error: No Block Group level data could be fetched.")
+        st.stop()
+        
+    # 2. Merge all BG-level DFs first
+    bg_merge_keys = ['state', 'county', 'tract', 'block group', 'NAME']
+    # Use only keys present in all DFs to avoid errors if NAME format differs slightly
+    common_keys = list(set.intersection(*(set(df.columns) for df in bg_dfs)))
+    # Ensure our critical keys are in the join list
+    final_bg_keys = [k for k in ['state', 'county', 'tract', 'block group'] if k in common_keys]
+    
+    df_master = reduce(lambda left, right: pd.merge(left, right, on=final_bg_keys, how='outer'), bg_dfs)
+    
+    # 3. Merge Tract-level DFs (broadcast/interpolate)
+    if tract_dfs:
+        # Merge keys for tract data
+        tract_keys = ['state', 'county', 'tract']
+        for t_df in tract_dfs:
+            # Drop NAME from tract DF to avoid collision with BG NAME
+            if 'NAME' in t_df.columns:
+                t_df = t_df.drop(columns=['NAME'])
+            df_master = pd.merge(df_master, t_df, on=tract_keys, how='left')
+
+    # Construct GEOID
+    if geo_level == 'tract':
+        df_master['GEOID'] = df_master['state'] + df_master['county'] + df_master['tract']
+    elif geo_level == 'block group':
+        df_master['GEOID'] = df_master['state'] + df_master['county'] + df_master['tract'] + df_master['block group']
 
     df_master = process_indicators(df_master, active_inds)
     full_df_scored, summary_stats = calculate_sd_scores(df_master, active_inds)
@@ -326,7 +388,7 @@ if st.session_state.analysis_results:
     st.title(f"IPD Analysis: {selected_state_name}")
     
     if geo_level == 'block group':
-        st.warning("⚠️ Note: Disability (D) data is excluded from Block Group analysis as it is not available from the Census at this level.")
+        st.info("ℹ️ Note: Disability (D) data is interpolated from Tract-level data for Block Group analysis.")
 
     tabs = st.tabs(["🗺️ Map", "📊 Stats", "📋 Data"])
     
