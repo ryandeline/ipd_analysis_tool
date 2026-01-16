@@ -36,7 +36,7 @@ US_STATES_FIPS = {
 }
 
 US_COUNTIES_FIPS = {
-    '11': [{'name': 'DC District', 'fips': '001'}], # Renamed to avoid duplicate option error
+    '11': [{'name': 'DC District', 'fips': '001'}], # Fixed: Changed name to avoid duplicate with State name
     '42': [
         {'name': 'Philadelphia County', 'fips': '101'},
         {'name': 'Allegheny County', 'fips': '003'},
@@ -195,11 +195,13 @@ api_key = st.sidebar.text_input("Census API Key", type="password")
 selected_state_name = st.sidebar.selectbox("State", options=list(US_STATES_FIPS.keys()))
 selected_state_fips = US_STATES_FIPS[selected_state_name]
 
-# FIX: Added unique names for counties to prevent Streamlit Multoselect Duplicate error
+# Safety check: Get unique list of county names for the selected state
 available_counties = US_COUNTIES_FIPS.get(selected_state_fips, [])
+county_options = sorted(list(set(c['name'] for c in available_counties)))
+
 selected_county_names = st.sidebar.multoselect(
     "Select Counties (optional)",
-    options=[c['name'] for c in available_counties],
+    options=county_options,
     help="Leave blank to analyze all counties."
 )
 selected_county_fips = [c['fips'] for c in available_counties if c['name'] in selected_county_names]
@@ -227,4 +229,5 @@ if run_btn:
                 legend_name='IPD Score'
             ).add_to(m)
             st_folium(m, width=1000, height=500)
+            st.subheader("📋 Data Preview")
             st.dataframe(final_gdf.drop(columns='geometry'))
