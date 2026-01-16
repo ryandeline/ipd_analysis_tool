@@ -284,7 +284,7 @@ selected_state_name = st.sidebar.selectbox("Select a State", options=list(US_STA
 selected_state_fips = US_STATES_FIPS.get(selected_state_name)
 
 available_counties = [{'name': 'All Counties', 'fips': 'ALL'}] + US_COUNTIES_FIPS.get(selected_state_fips, [])
-selected_county_names = st.sidebar.multiselect(
+selected_county_names = st.sidebar.multoselect(
     "Select Counties (optional)",
     options=[c['name'] for c in available_counties],
     help="Leave blank to analyze all counties in the selected state."
