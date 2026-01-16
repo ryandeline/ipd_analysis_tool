@@ -3,3 +3,4 @@ build-essential
 libgdal-dev
 gdal-bin
 proj-bin
+unixodbc-dev
