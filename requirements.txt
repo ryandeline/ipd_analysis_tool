@@ -7,5 +7,5 @@ streamlit-folium
 requests
 openpyxl
 shapely>=2.0
-pyproj>=3.6
+pyproj>=3.6s
 fiona>=1.9
