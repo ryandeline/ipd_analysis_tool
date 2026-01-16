@@ -90,7 +90,7 @@ def get_census_geometry(year, state_fips, geo_level):
     file_code = "tract" if geo_level == 'tract' else "bg"
     url = f"{base_url}/TIGER{year}/{layer_name}/tl_{year}_{state_fips}_{file_code}.zip"
     try:
-        gdf = gpd.read_file(url)
+        gdf = gpd.read_file(url, engine='pyogrio')
         keep_cols = ['GEOID', 'geometry', 'ALAND', 'AWATER']
         return gdf[keep_cols]
     except Exception as e:

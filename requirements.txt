@@ -1,6 +1,7 @@
 streamlit
 pandas>=2.0
 geopandas>=0.14
+pyogrio
 folium>=0.15
 streamlit-folium
 requests
