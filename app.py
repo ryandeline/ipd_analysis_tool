@@ -48,8 +48,12 @@ st.markdown("""
         margin-bottom: 0.5rem;
     }
     /* Center the toast/status messages vertically */
-    .stStatusWidget {
-        top: 50% !important;
+    div[data-testid="stStatusWidget"] {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 9999;
     }
 </style>
 """, unsafe_allow_html=True)
