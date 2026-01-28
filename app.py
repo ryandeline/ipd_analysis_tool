@@ -300,26 +300,26 @@ def calculate_sd_scores(df, indicators):
                 'Break_Plus_0.5SD': round(ib3, 1),
                 'Break_Plus_1.5SD': round(ib4, 1)
             })
+    
+    # 3. Confidence Check (Row-Level Consistency)
+    if score_cols:
+        df_scored['indicators_mean'] = df_scored[score_cols].mean(axis=1)
+        df_scored['indicators_std'] = df_scored[score_cols].std(axis=1)
         
-        # 3. Confidence Check (Row-Level Consistency)
-        if score_cols:
-            df_scored['indicators_mean'] = df_scored[score_cols].mean(axis=1)
-            df_scored['indicators_std'] = df_scored[score_cols].std(axis=1)
-            
-            def get_confidence(row):
-                if row['indicators_mean'] == 0: return 'High'
-                cv = row['indicators_std'] / row['indicators_mean']
-                if cv < 0.5: return 'High'
-                elif cv < 1.0: return 'Medium'
-                else: return 'Low'
+        def get_confidence(row):
+            if row['indicators_mean'] == 0: return 'High'
+            cv = row['indicators_std'] / row['indicators_mean']
+            if cv < 0.5: return 'High'
+            elif cv < 1.0: return 'Medium'
+            else: return 'Low'
 
-            df_scored['IPD_CONFIDENCE'] = df_scored.apply(get_confidence, axis=1)
-            
-            stats_list.append({
-                'Indicator': 'ROW_WISE_CONFIDENCE',
-                'Mean': round(df_scored['indicators_mean'].mean(), 1),
-                'SD': round(df_scored['indicators_mean'].std(), 1)
-            })
+        df_scored['IPD_CONFIDENCE'] = df_scored.apply(get_confidence, axis=1)
+        
+        stats_list.append({
+            'Indicator': 'ROW_WISE_CONFIDENCE',
+            'Mean': round(df_scored['indicators_mean'].mean(), 1),
+            'SD': round(df_scored['indicators_mean'].std(), 1)
+        })
         
     return df_scored, pd.DataFrame(stats_list)
 
