@@ -538,7 +538,7 @@ if st.session_state.analysis_results:
             fill_color='YlOrRd',
             legend_name=map_legend
         ).add_to(m)
-        st_folium(m, width="100%", height=450) # Reduced height for compactness
+        st_folium(m, width="100%", height=400) # Reduced height for compactness
 
     # 3. Data & Downloads (Left Column)
     with col_data:
@@ -575,11 +575,11 @@ if st.session_state.analysis_results:
                 display_df,
                 use_container_width=True,
                 column_config=col_config,
-                height=450 # Reduced height for compactness
+                height=400 # Reduced height for compactness
             )
             
         with tab_stats:
-            st.dataframe(summary_stats, use_container_width=True, height=450)
+            st.dataframe(summary_stats, use_container_width=True, height=400)
             # Removed duplicate download button here
 
 else:
