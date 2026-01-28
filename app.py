@@ -716,5 +716,3 @@ if st.session_state.analysis_results:
             m4.metric("Avg Score (Selected)", f"{avg:.2f}" if not pd.isna(avg) else "0.0")
         else:
             m4.metric("Avg Score", f"{active_df_for_stats['IPD_SCORE'].mean():.1f}")
-
-else:
