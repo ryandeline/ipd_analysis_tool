@@ -167,13 +167,18 @@ def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, ge
         
     # Summation Logic
     available_est_cols = [f"{c}E" for c in count_vars if f"{c}E" in df_final.columns]
-    df_final[f"{indicator_code}_est"] = df_final[available_est_cols].sum(axis=1) if available_est_cols else 0
+    # FIX: Ensure at least one column exists before summing, otherwise set to 0. 
+    # For TOT_POP, this is critical.
+    if available_est_cols:
+        df_final[f"{indicator_code}_est"] = df_final[available_est_cols].sum(axis=1)
+    else:
+        # Fallback if no estimate columns found (e.g. API returned subset)
+        df_final[f"{indicator_code}_est"] = 0
     
     available_moe_cols = [f"{c}M" for c in count_vars if f"{c}M" in df_final.columns]
     df_final[f"{indicator_code}_est_moe"] = np.sqrt((df_final[available_moe_cols] ** 2).sum(axis=1)) if available_moe_cols else 0
     
     if u_var:
-        # Use simple get with default or check if column exists to avoid AttributeError on some GeoDataFrame versions
         if f"{u_var}E" in df_final.columns:
             df_final[f"{indicator_code}_uni"] = df_final[f"{u_var}E"]
         else:
@@ -318,13 +323,21 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     status = st.status(f"Analysing {state_name} ({geo_level})...", expanded=True)
     
     VARIABLES = ACS_VARS_BG if geo_level == 'block group' else ACS_VARS_TRACT
+    # Fetch TOT_POP separately to ensure it exists
     active_inds = [k for k in VARIABLES.keys() if k != 'TOT_POP']
 
     indicator_dfs = []
-    total_steps = len(active_inds) + 2
+    total_steps = len(active_inds) + 3 # +1 for TOT_POP
     
+    # 1. Fetch TOT_POP first
+    status.update(label=f"Fetching Indicator: TOT_POP (1/{total_steps})")
+    df_pop = fetch_single_indicator('TOT_POP', VARIABLES['TOT_POP'], year, state_fips, counties, geo_level, api_key)
+    if not df_pop.empty:
+        indicator_dfs.append(df_pop)
+    
+    # 2. Fetch other indicators
     for i, ind_code in enumerate(active_inds):
-        status.update(label=f"Fetching Indicator: {ind_code} ({i+1}/{total_steps})")
+        status.update(label=f"Fetching Indicator: {ind_code} ({i+2}/{total_steps})")
         df_ind = fetch_single_indicator(ind_code, VARIABLES[ind_code], year, state_fips, counties, geo_level, api_key)
         if not df_ind.empty: indicator_dfs.append(df_ind)
 
@@ -426,10 +439,16 @@ if st.session_state.analysis_results:
     met1.metric("Geographic Level", geo_level.title())
     met2.metric("Total Units Analyzed", f"{len(final_gdf):,}")
     
-    # Safe access to TOT_POP_est using bracket notation with fillna, avoiding .get() on gdf
+    # Safe access to TOT_POP_est using bracket notation with fillna
     total_pop = final_gdf['TOT_POP_est'].sum() if 'TOT_POP_est' in final_gdf.columns else 0
     met3.metric("Total Population", f"{int(total_pop):,}")
-    met4.metric("Avg IPD Score", f"{final_gdf['IPD_SCORE'].mean():.1f}")
+    
+    # Display the Normalized Score Average if available, else raw
+    if 'IPD_SCORE_score' in final_gdf.columns:
+        avg_score = final_gdf['IPD_SCORE_score'].mean()
+        met4.metric("Avg IPD Score (0-4)", f"{avg_score:.2f}")
+    else:
+        met4.metric("Avg IPD Score", f"{final_gdf['IPD_SCORE'].mean():.1f}")
     
     st.divider()
 
@@ -441,13 +460,17 @@ if st.session_state.analysis_results:
         min_lon, min_lat, max_lon, max_lat = final_gdf.total_bounds
         m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
 
+    # Choose column for map color (Normalized if available)
+    map_col = 'IPD_SCORE_score' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD_SCORE'
+    map_legend = 'IPD Score (0-4)' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD Score'
+
     folium.Choropleth(
         geo_data=final_gdf.to_json(),
         data=final_gdf,
-        columns=['GEOID', 'IPD_SCORE'],
+        columns=['GEOID', map_col],
         key_on='feature.properties.GEOID',
         fill_color='YlOrRd',
-        legend_name='IPD Score'
+        legend_name=map_legend
     ).add_to(m)
     st_folium(m, width="100%", height=500)
 
@@ -463,24 +486,35 @@ if st.session_state.analysis_results:
 
     with tab_data:
         # Display Data with Progress Bar for IPD Score
-        display_cols = ['GEOID', 'IPD_SCORE', 'IPD_SCORE_class', 'IPD_CONFIDENCE', 'TOT_POP_est'] + [c for c in final_gdf.columns if '_pct' in c]
+        # Add individual indicator scores and percents to display
+        base_cols = ['GEOID', 'IPD_SCORE_score', 'IPD_SCORE', 'IPD_SCORE_class', 'IPD_CONFIDENCE', 'TOT_POP_est']
+        
+        # Dynamically find indicator columns (percentages and scores)
+        pct_cols = [c for c in final_gdf.columns if c.endswith('_pct')]
+        score_cols = [c for c in final_gdf.columns if c.endswith('_score') and c != 'IPD_SCORE_score']
+        
+        display_cols = base_cols + sorted(pct_cols + score_cols)
+        
         # Ensure cols exist
         display_cols = [c for c in display_cols if c in final_gdf.columns]
         display_df = final_gdf[display_cols].copy()
         
+        # Column config for cleaner display
+        col_config = {
+            "IPD_SCORE_score": st.column_config.ProgressColumn(
+                "Normalized IPD Score (0-4)",
+                help="Composite Disadvantage Score (0-4 Scale)",
+                format="%d",
+                min_value=0,
+                max_value=4,
+            ),
+            "TOT_POP_est": st.column_config.NumberColumn("Population", format="%d")
+        }
+
         st.dataframe(
             display_df,
             use_container_width=True,
-            column_config={
-                "IPD_SCORE": st.column_config.ProgressColumn(
-                    "IPD Score",
-                    help="Composite Disadvantage Score",
-                    format="%d",
-                    min_value=0,
-                    max_value=int(final_gdf['IPD_SCORE'].max()),
-                ),
-                "TOT_POP_est": st.column_config.NumberColumn("Population", format="%d")
-            }
+            column_config=col_config
         )
         
         c1, c2 = st.columns(2)
