@@ -483,120 +483,51 @@ if run_btn:
 if st.session_state.analysis_results:
     final_gdf, summary_stats = st.session_state.analysis_results
     
-    # 1. Header Metrics - Dynamic calculation based on selection (if filtering is active later)
-    # Since filter logic is below, metrics for initial view are based on full dataset.
-    # To make them dynamic with selection, we would need to move this below or re-calc.
-    # For now, we will calc based on 'active_df' which we determine after selection.
-    # But Streamlit renders top-down. 
-    # To fix this, we create a placeholder for metrics and update it later or use a callback pattern.
-    # Simplest way: Render metrics based on filtered_df if available in session state from previous run?
-    # No, let's keep it simple: Metrics update on interaction if we place them after interaction logic or use st.empty()
+    # 1. Header Metrics
+    st.markdown(f"### 📊 Results for {selected_state_name}")
+    met1, met2, met3, met4 = st.columns(4)
+    met1.metric("Geographic Level", geo_level.title())
+    met2.metric("Total Units Analyzed", f"{len(final_gdf):,}")
     
-    metrics_container = st.container() # Placeholder at top
-
+    # Safe access to TOT_POP_est using bracket notation with fillna
+    total_pop = final_gdf['TOT_POP_est'].sum() if 'TOT_POP_est' in final_gdf.columns else 0
+    met3.metric("Total Population", f"{int(total_pop):,}")
+    
+    # Display the Normalized Score Average if available, else raw
+    if 'IPD_SCORE_score' in final_gdf.columns:
+        avg_score = final_gdf['IPD_SCORE_score'].mean()
+        met4.metric("Avg IPD Score (0-4)", f"{avg_score:.2f}")
+    else:
+        met4.metric("Avg IPD Score", f"{final_gdf['IPD_SCORE'].mean():.1f}")
+    
     st.divider()
 
     # Create two columns for the layout
     col_data, col_map = st.columns([1, 1])
 
-    # 3. Data Table (Left Column) - Render FIRST to get selection state
-    with col_data:
-        tab_data, tab_stats = st.tabs(["📋 Detailed Data Table", "📈 Summary Statistics"])
-        
-        with tab_data:
-            # Display Data with Progress Bar for IPD Score
-            base_cols = ['GEOID', 'IPD_SCORE_score', 'IPD_SCORE', 'IPD_SCORE_class', 'IPD_CONFIDENCE', 'TOT_POP_est']
-            pct_cols = [c for c in final_gdf.columns if c.endswith('_pct')]
-            score_cols = [c for c in final_gdf.columns if c.endswith('_score') and c != 'IPD_SCORE_score']
-            display_cols = base_cols + sorted(pct_cols + score_cols)
-            display_cols = [c for c in display_cols if c in final_gdf.columns]
-            
-            # --- TABLE SELECTION LOGIC ---
-            # Initial filtered DF is full DF.
-            # If map clicked (last run), we filter table.
-            # Map click state needs to be persistent or retrieved.
-            
-            # Check for existing table selection (multi-row)
-            # Logic: If table has selection, we filter map data to those rows.
-            # If map has click, we filter table data to that row.
-            # Priority? Usually the last interaction wins.
-            # To avoid loops, clear other selection?
-            
-            # Let's keep it simple: 
-            # 1. We render the table with the FULL dataset first (or filtered by map click).
-            # 2. We capture the table selection.
-            # 3. We use the table selection to filter the MAP.
-            
-            # Map Click Handling
-            map_click_geoid = None
-            if st.session_state.get("map_last_click"):
-                # "last_object_clicked" is set by st_folium in session state key if specified
-                click_data = st.session_state["map_last_click"]
-                if click_data:
-                    map_click_geoid = click_data.get("properties", {}).get("GEOID")
-
-            # Determine Table Data
-            if map_click_geoid:
-                table_data = final_gdf[final_gdf['GEOID'] == map_click_geoid].copy()
-                st.caption(f"Filtered by Map Click: {map_click_geoid}")
-            else:
-                table_data = final_gdf.copy()
-
-            col_config = {
-                "IPD_SCORE_score": st.column_config.ProgressColumn(
-                    "Normalized IPD Score (0-4)",
-                    help="Composite Disadvantage Score (0-4 Scale)",
-                    format="%d",
-                    min_value=0,
-                    max_value=4,
-                ),
-                "TOT_POP_est": st.column_config.NumberColumn("Population", format="%d")
-            }
-
-            selection = st.dataframe(
-                table_data[display_cols],
-                use_container_width=True,
-                column_config=col_config,
-                height=400,
-                on_select="rerun",
-                selection_mode="multi-row",
-                key="table_selection"
-            )
-            
-            c1, c2 = st.columns(2)
-            # Helpers
-            @st.cache_data
-            def convert_df(df): return df.to_csv(index=False).encode('utf-8')
-            @st.cache_data
-            def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
-            
-            c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True)
-            c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
-
-        with tab_stats:
-            st.dataframe(summary_stats, use_container_width=True, height=400)
-
     # 2. Main Map Visualization (Right Column) - Render SECOND to use table selection
     with col_map:
-        # Determine Map Data
-        # If rows selected in table, filter map to those rows.
-        if selection.selection.rows:
-            selected_indices = selection.selection.rows
-            # Get GEOIDs from the *displayed* table data at those indices
-            selected_geoids = table_data.iloc[selected_indices]['GEOID'].tolist()
-            map_data = final_gdf[final_gdf['GEOID'].isin(selected_geoids)].copy()
-        else:
-            map_data = final_gdf.copy() # Show all if no selection
+        # Helpers
+        @st.cache_data
+        def convert_df(df): return df.to_csv(index=False).encode('utf-8')
+        
+        @st.cache_data
+        def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
+
+        # Download Buttons (Placed above map) - Single Set
+        c1, c2 = st.columns(2)
+        c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True)
+        c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
 
         # Map Setup
-        if not map_data.empty:
+        if not final_gdf.empty:
             # Re-center map based on filtered data
-            center_lat = map_data.geometry.centroid.y.mean()
-            center_lon = map_data.geometry.centroid.x.mean()
+            center_lat = final_gdf.geometry.centroid.y.mean()
+            center_lon = final_gdf.geometry.centroid.x.mean()
             m = folium.Map(location=[center_lat, center_lon])
             
-            if map_data.crs != 'EPSG:4326': map_data = map_data.to_crs('EPSG:4326')
-            min_lon, min_lat, max_lon, max_lat = map_data.total_bounds
+            if final_gdf.crs != 'EPSG:4326': final_gdf = final_gdf.to_crs('EPSG:4326')
+            min_lon, min_lat, max_lon, max_lat = final_gdf.total_bounds
             # Add padding to bounds to ensure visibility
             m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
         else:
@@ -606,8 +537,8 @@ if st.session_state.analysis_results:
         map_legend = 'IPD Score (0-4)' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD Score'
 
         choropleth = folium.Choropleth(
-            geo_data=map_data.to_json(),
-            data=map_data,
+            geo_data=final_gdf.to_json(),
+            data=final_gdf,
             columns=['GEOID', map_col],
             key_on='feature.properties.GEOID',
             fill_color='YlOrRd',
@@ -621,29 +552,47 @@ if st.session_state.analysis_results:
         # Note: 'key' argument is important to distinguish this instance
         st_folium(m, width="100%", height=450, key="map_last_click", returned_objects=["last_object_clicked"])
 
-    # 4. Update Header Metrics (Dynamic)
-    # Logic: If map is filtered by table selection, use map_data.
-    # If table is filtered by map click, use table_data.
-    # Basically, use the dataset that represents the user's current "view".
-    # Since map_data reflects table selection, and table_data reflects map click...
-    # We essentially want the intersection or the most restrictive set? 
-    # Let's use map_data as the source of truth for the metrics, as it reflects the visual state.
-    
-    active_df = map_data if not map_data.empty else final_gdf
-    
-    with metrics_container:
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Geographic Level", geo_level.title())
-        m2.metric("Selected Units", f"{len(active_df):,}")
+    # 3. Data & Downloads (Left Column)
+    with col_data:
+        tab_data, tab_stats = st.tabs(["📋 Detailed Data Table", "📈 Summary Statistics"])
         
-        pop = active_df['TOT_POP_est'].sum() if 'TOT_POP_est' in active_df.columns else 0
-        m3.metric("Population (Selected)", f"{int(pop):,}")
-        
-        if 'IPD_SCORE_score' in active_df.columns:
-            avg = active_df['IPD_SCORE_score'].mean()
-            m4.metric("Avg Score (Selected)", f"{avg:.2f}" if not pd.isna(avg) else "0.0")
-        else:
-            m4.metric("Avg Score", f"{active_df['IPD_SCORE'].mean():.1f}")
+        with tab_data:
+            # Display Data with Progress Bar for IPD Score
+            # Add individual indicator scores and percents to display
+            base_cols = ['GEOID', 'IPD_SCORE_score', 'IPD_SCORE', 'IPD_SCORE_class', 'IPD_CONFIDENCE', 'TOT_POP_est']
+            
+            # Dynamically find indicator columns (percentages and scores)
+            pct_cols = [c for c in final_gdf.columns if c.endswith('_pct')]
+            score_cols = [c for c in final_gdf.columns if c.endswith('_score') and c != 'IPD_SCORE_score']
+            
+            display_cols = base_cols + sorted(pct_cols + score_cols)
+            
+            # Ensure cols exist
+            display_cols = [c for c in display_cols if c in final_gdf.columns]
+            display_df = final_gdf[display_cols].copy()
+            
+            # Column config for cleaner display
+            col_config = {
+                "IPD_SCORE_score": st.column_config.ProgressColumn(
+                    "Normalized IPD Score (0-4)",
+                    help="Composite Disadvantage Score (0-4 Scale)",
+                    format="%d",
+                    min_value=0,
+                    max_value=4,
+                ),
+                "TOT_POP_est": st.column_config.NumberColumn("Population", format="%d")
+            }
+
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                column_config=col_config,
+                height=450 # Reduced height for compactness
+            )
+            
+        with tab_stats:
+            st.dataframe(summary_stats, use_container_width=True, height=450)
+            st.download_button("📥 Download Stats CSV", convert_df(summary_stats), f"IPD_{selected_state_name}_Stats.csv", "text/csv")
 
 else:
     st.info("👈 Use the sidebar to configure and run the analysis.")
