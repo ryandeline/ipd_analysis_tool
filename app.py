@@ -54,6 +54,7 @@ st.markdown("""
         left: 50%;
         transform: translate(-50%, -50%);
         z-index: 9999;
+        width: 300px; /* Fixed width for better appearance */
     }
 </style>
 """, unsafe_allow_html=True)
@@ -370,14 +371,14 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     total_steps = len(active_inds) + 3 # +1 for TOT_POP
     
     # 1. Fetch TOT_POP first
-    status.update(label=f"Fetching Indicator: TOT_POP (1/{total_steps})")
+    status.write("Fetching Indicator: TOT_POP...")
     df_pop = fetch_single_indicator('TOT_POP', VARIABLES['TOT_POP'], year, state_fips, counties, geo_level, api_key)
     if not df_pop.empty:
         indicator_dfs.append(df_pop)
     
     # 2. Fetch other indicators
     for i, ind_code in enumerate(active_inds):
-        status.update(label=f"Fetching Indicator: {ind_code} ({i+2}/{total_steps})")
+        status.write(f"Fetching Indicator: {ind_code}...")
         df_ind = fetch_single_indicator(ind_code, VARIABLES[ind_code], year, state_fips, counties, geo_level, api_key)
         if not df_ind.empty: indicator_dfs.append(df_ind)
 
@@ -385,7 +386,7 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
         st.error("No data fetched. Check API key.")
         st.stop()
     
-    status.update(label="Merging datasets...")
+    status.write("Merging datasets...")
     bg_dfs = [df for df in indicator_dfs if 'block group' in df.columns]
     tract_dfs = [df for df in indicator_dfs if 'block group' not in df.columns]
     
@@ -420,7 +421,7 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     else:
         df_master['GEOID'] = df_master['state'] + df_master['county'] + df_master['tract'] + df_master['block group']
 
-    status.update(label="Calculating scores & geometry...")
+    status.write("Calculating scores & geometry...")
     df_master = process_indicators(df_master, active_inds)
     full_df_scored, summary_stats = calculate_sd_scores(df_master, active_inds)
 
