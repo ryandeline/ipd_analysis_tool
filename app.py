@@ -19,6 +19,18 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Custom CSS to reduce padding
+st.markdown("""
+<style>
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 0rem;
+        padding-left: 5rem;
+        padding-right: 5rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # --- Constants & Configuration ---
 US_STATES_FIPS = {
     'Alabama': '01', 'Alaska': '02', 'Arizona': '04', 'Arkansas': '05', 'California': '06',
