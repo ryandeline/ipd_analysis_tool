@@ -427,7 +427,11 @@ with st.sidebar:
     geo_level = col_geo.selectbox("Level", ['tract', 'block group'])
     
     st.divider()
-    run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
+    col_run, col_reset = st.columns(2)
+    run_btn = col_run.button("🚀 Run Analysis", type="primary", use_container_width=True)
+    if col_reset.button("🔄 Reset App", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
 
 # --- Main Dashboard ---
 if run_btn:
