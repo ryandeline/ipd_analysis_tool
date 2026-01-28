@@ -454,15 +454,20 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
 
         # --- MAP RENDER ---
         if not map_data.empty:
+            # Re-center map based on filtered data
             center_lat = map_data.geometry.centroid.y.mean()
             center_lon = map_data.geometry.centroid.x.mean()
             m = folium.Map(location=[center_lat, center_lon])
             
             if map_data.crs != 'EPSG:4326': map_data = map_data.to_crs('EPSG:4326')
             min_lon, min_lat, max_lon, max_lat = map_data.total_bounds
+            # Add padding to bounds to ensure visibility
             m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
         else:
             m = folium.Map(location=[39.8, -98.5], zoom_start=4)
+
+        map_col = 'IPD_SCORE_score' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD_SCORE'
+        map_legend = 'IPD Score (0-4)' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD Score'
 
         choropleth = folium.Choropleth(
             geo_data=map_data.to_json(),
