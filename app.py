@@ -65,23 +65,17 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     active_inds = [k for k in VARIABLES.keys() if k != 'TOT_POP']
 
     indicator_dfs = []
-    total_steps = len(active_inds) + 3 # +1 for TOT_POP
+    total_steps = len(active_inds) + 3 
     
-    # 1. Fetch TOT_POP first
     status.write(f"Fetching Indicator: TOT_POP (1/{total_steps})")
     df_pop = fetch_single_indicator('TOT_POP', VARIABLES['TOT_POP'], year, state_fips, counties, geo_level, api_key)
-    if not df_pop.empty:
-        indicator_dfs.append(df_pop)
+    if not df_pop.empty: indicator_dfs.append(df_pop)
     
-    # 2. Fetch other indicators
     for i, ind_code in enumerate(active_inds):
         codes = VARIABLES[ind_code]
         desc = "Fetching"
-        if isinstance(codes.get('count'), list):
-            desc = "Summing tables for"
-        elif codes.get('interpolate'):
-            desc = "Interpolating tract data for"
-            
+        if isinstance(codes.get('count'), list): desc = "Summing tables for"
+        elif codes.get('interpolate'): desc = "Interpolating tract data for"
         status.write(f"{desc} Indicator: {ind_code} ({i+2}/{total_steps})")
         df_ind = fetch_single_indicator(ind_code, VARIABLES[ind_code], year, state_fips, counties, geo_level, api_key)
         if not df_ind.empty: indicator_dfs.append(df_ind)
@@ -101,7 +95,6 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     common_keys = list(set.intersection(*(set(df.columns) for df in (bg_dfs if bg_dfs else tract_dfs))))
     base_keys = [k for k in ['state', 'county', 'tract', 'block group'] if k in common_keys]
     
-    # Deduplicate NAME column
     for df in (bg_dfs if bg_dfs else tract_dfs):
         if 'NAME' in df.columns and 'NAME' not in base_keys: base_keys.append('NAME')
 
@@ -129,7 +122,7 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     df_master = process_indicators(df_master, active_inds)
     full_df_scored, summary_stats = calculate_sd_scores(df_master, active_inds)
 
-    status.write("Applying geometry & final composite score...")
+    status.write("Applying geometry...")
     gdf_geom = get_census_geometry(year, state_fips, geo_level)
     if counties: gdf_geom = gdf_geom[gdf_geom['GEOID'].str[2:5].isin(counties)]
     
@@ -145,7 +138,6 @@ if 'analysis_results' not in st.session_state:
 
 with st.sidebar:
     st.title("🗺️ IPD Settings")
-    
     with st.expander("🔑 API Key Configuration", expanded=False):
         api_key_placeholder = st.secrets.get("CENSUS_API_KEY", "dfb115d4ff6b35a8ccc01892add4258ba7b48eaf")
         api_key = st.text_input("Census API Key", value=api_key_placeholder, type="password")
@@ -188,16 +180,6 @@ if st.session_state.analysis_results:
     # Layout Columns
     col_data, col_map = st.columns([1, 1])
 
-    # --- INTERACTION STATE MANAGEMENT ---
-    # Check map click state
-    map_click_geoid = None
-    if st.session_state.get("map_last_click"):
-        click_payload = st.session_state["map_last_click"]
-        if click_payload and "last_object_clicked" in click_payload:
-             obj = click_payload["last_object_clicked"]
-             if obj and "properties" in obj:
-                 map_click_geoid = obj["properties"].get("GEOID")
-
     # 2. Data Table (Left Column)
     with col_data:
         tab_data, tab_stats = st.tabs(["📋 Detailed Data Table", "📈 Summary Statistics"])
@@ -209,17 +191,21 @@ if st.session_state.analysis_results:
             display_cols = base_cols + sorted(pct_cols + score_cols)
             display_cols = [c for c in display_cols if c in final_gdf.columns]
             
-            table_source_df = final_gdf[display_cols].copy()
+            display_df = final_gdf[display_cols].copy()
             
-            # ...UNLESS Map was clicked.
+            # --- Check Map Click ---
+            map_click_geoid = None
+            if st.session_state.get("map_last_click"):
+                click_data = st.session_state["map_last_click"]
+                if click_data:
+                    map_click_geoid = click_data.get("properties", {}).get("GEOID")
+
+            # Filter table if map clicked
             if map_click_geoid:
-                table_display_df = table_source_df[table_source_df['GEOID'] == map_click_geoid]
-                st.caption(f"📍 Filtered by Map Selection: **{map_click_geoid}**")
-                if st.button("Clear Map Selection", key="clear_map"):
-                    st.session_state["map_reset_token"] = st.session_state.get("map_reset_token", 0) + 1
-                    st.rerun()
+                table_data = display_df[display_df['GEOID'] == map_click_geoid].copy()
+                st.caption(f"Filtered by Map Click: {map_click_geoid}")
             else:
-                table_display_df = table_source_df
+                table_data = display_df.copy()
 
             col_config = {
                 "IPD_SCORE_score": st.column_config.ProgressColumn(
@@ -230,10 +216,10 @@ if st.session_state.analysis_results:
             }
 
             selection = st.dataframe(
-                table_display_df,
+                table_data,
                 use_container_width=True,
                 column_config=col_config,
-                height=400, 
+                height=450, 
                 on_select="rerun",
                 selection_mode="multi-row",
                 key="table_selection"
@@ -243,8 +229,7 @@ if st.session_state.analysis_results:
     if selection.selection.rows:
         selected_indices = selection.selection.rows
         # Map indices back to GEOIDs from displayed dataframe
-        # Note: if table is filtered by map click, this still works correctly relative to the filtered view
-        selected_geoids = table_display_df.iloc[selected_indices]['GEOID'].tolist()
+        selected_geoids = table_data.iloc[selected_indices]['GEOID'].tolist()
         active_df_stats = final_gdf[final_gdf['GEOID'].isin(selected_geoids)].copy()
     elif map_click_geoid:
         active_df_stats = final_gdf[final_gdf['GEOID'] == map_click_geoid].copy()
@@ -293,7 +278,7 @@ if st.session_state.analysis_results:
         choropleth.geojson.add_child(folium.features.GeoJsonTooltip(fields=['GEOID', map_col], labels=True))
         
         map_key = f"map_last_click_{st.session_state.get('map_reset_token', 0)}"
-        st_folium(m, width="100%", height=400, key=map_key, returned_objects=["last_object_clicked"])
+        st_folium(m, width="100%", height=450, key=map_key, returned_objects=["last_object_clicked"])
 
     # 4. Update Stats Tab
     with tab_stats:
@@ -321,7 +306,7 @@ if st.session_state.analysis_results:
                 })
             
             stats_df = pd.DataFrame(subset_stats)
-            st.dataframe(stats_df, use_container_width=True, height=400)
+            st.dataframe(stats_df, use_container_width=True, height=450)
             st.download_button("📥 Download Stats", convert_df(stats_df), "IPD_Stats_Subset.csv", "text/csv", key="btn_stat_sub")
         else:
             st.write("No data selected.")
