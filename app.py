@@ -502,7 +502,7 @@ if st.session_state.analysis_results:
         @st.cache_data
         def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
 
-        # Download Buttons (Above Map)
+        # Download Buttons (Above Map) - Single Set with Unique Keys
         c1, c2 = st.columns(2)
         c1.download_button("📥 Download GeoJSON", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}.geojson", "application/json", use_container_width=True, key="btn_geo")
         c2.download_button("📥 Download CSV", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}.csv", "text/csv", use_container_width=True, key="btn_csv")
