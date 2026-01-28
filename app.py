@@ -452,7 +452,7 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
             map_data = final_gdf[final_gdf['GEOID'] == map_click_geoid]
             active_df_stats = map_data
 
-        # --- MAP RENDER ---
+        # Map Setup
         if not map_data.empty:
             # Re-center map based on filtered data
             center_lat = map_data.geometry.centroid.y.mean()
