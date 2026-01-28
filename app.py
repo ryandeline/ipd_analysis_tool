@@ -180,6 +180,16 @@ if st.session_state.analysis_results:
     # Layout Columns
     col_data, col_map = st.columns([1, 1])
 
+    # --- INTERACTION STATE MANAGEMENT ---
+    # Check map click state
+    map_click_geoid = None
+    if st.session_state.get("map_last_click"):
+        click_payload = st.session_state["map_last_click"]
+        if click_payload and "last_object_clicked" in click_payload:
+             obj = click_payload["last_object_clicked"]
+             if obj and "properties" in obj:
+                 map_click_geoid = obj["properties"].get("GEOID")
+
     # 2. Data Table (Left Column)
     with col_data:
         tab_data, tab_stats = st.tabs(["📋 Detailed Data Table", "📈 Summary Statistics"])
@@ -191,21 +201,17 @@ if st.session_state.analysis_results:
             display_cols = base_cols + sorted(pct_cols + score_cols)
             display_cols = [c for c in display_cols if c in final_gdf.columns]
             
-            display_df = final_gdf[display_cols].copy()
+            table_source_df = final_gdf[display_cols].copy()
             
-            # --- Check Map Click ---
-            map_click_geoid = None
-            if st.session_state.get("map_last_click"):
-                click_data = st.session_state["map_last_click"]
-                if click_data:
-                    map_click_geoid = click_data.get("properties", {}).get("GEOID")
-
-            # Filter table if map clicked
+            # ...UNLESS Map was clicked.
             if map_click_geoid:
-                table_data = display_df[display_df['GEOID'] == map_click_geoid].copy()
-                st.caption(f"Filtered by Map Click: {map_click_geoid}")
+                table_display_df = table_source_df[table_source_df['GEOID'] == map_click_geoid]
+                st.caption(f"📍 Filtered by Map Selection: **{map_click_geoid}**")
+                if st.button("Clear Map Selection", key="clear_map"):
+                    st.session_state["map_reset_token"] = st.session_state.get("map_reset_token", 0) + 1
+                    st.rerun()
             else:
-                table_data = display_df.copy()
+                table_display_df = table_source_df
 
             col_config = {
                 "IPD_SCORE_score": st.column_config.ProgressColumn(
@@ -216,7 +222,7 @@ if st.session_state.analysis_results:
             }
 
             selection = st.dataframe(
-                table_data,
+                table_display_df,
                 use_container_width=True,
                 column_config=col_config,
                 height=450, 
@@ -229,7 +235,7 @@ if st.session_state.analysis_results:
     if selection.selection.rows:
         selected_indices = selection.selection.rows
         # Map indices back to GEOIDs from displayed dataframe
-        selected_geoids = table_data.iloc[selected_indices]['GEOID'].tolist()
+        selected_geoids = table_display_df.iloc[selected_indices]['GEOID'].tolist()
         active_df_stats = final_gdf[final_gdf['GEOID'].isin(selected_geoids)].copy()
     elif map_click_geoid:
         active_df_stats = final_gdf[final_gdf['GEOID'] == map_click_geoid].copy()
@@ -306,7 +312,7 @@ if st.session_state.analysis_results:
                 })
             
             stats_df = pd.DataFrame(subset_stats)
-            st.dataframe(stats_df, use_container_width=True, height=450)
+            st.dataframe(stats_df, use_container_width=True, height=400)
             st.download_button("📥 Download Stats", convert_df(stats_df), "IPD_Stats_Subset.csv", "text/csv", key="btn_stat_sub")
         else:
             st.write("No data selected.")
