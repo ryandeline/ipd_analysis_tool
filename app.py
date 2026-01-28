@@ -235,6 +235,7 @@ if st.session_state.analysis_results:
     if selection.selection.rows:
         selected_indices = selection.selection.rows
         # Map indices back to GEOIDs from displayed dataframe
+        # Note: if table is filtered by map click, this still works correctly relative to the filtered view
         selected_geoids = table_display_df.iloc[selected_indices]['GEOID'].tolist()
         active_df_stats = final_gdf[final_gdf['GEOID'].isin(selected_geoids)].copy()
     elif map_click_geoid:
