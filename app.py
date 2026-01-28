@@ -173,8 +173,16 @@ def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, ge
     df_final[f"{indicator_code}_est_moe"] = np.sqrt((df_final[available_moe_cols] ** 2).sum(axis=1)) if available_moe_cols else 0
     
     if u_var:
-        df_final[f"{indicator_code}_uni"] = df_final.get(f"{u_var}E", 0)
-        df_final[f"{indicator_code}_uni_moe"] = df_final.get(f"{u_var}M", 0)
+        # Use simple get with default or check if column exists to avoid AttributeError on some GeoDataFrame versions
+        if f"{u_var}E" in df_final.columns:
+            df_final[f"{indicator_code}_uni"] = df_final[f"{u_var}E"]
+        else:
+            df_final[f"{indicator_code}_uni"] = 0
+            
+        if f"{u_var}M" in df_final.columns:
+            df_final[f"{indicator_code}_uni_moe"] = df_final[f"{u_var}M"]
+        else:
+            df_final[f"{indicator_code}_uni_moe"] = 0
     
     return df_final
 
@@ -332,7 +340,10 @@ if st.session_state.analysis_results:
     met1, met2, met3, met4 = st.columns(4)
     met1.metric("Geographic Level", geo_level.title())
     met2.metric("Total Units Analyzed", f"{len(final_gdf):,}")
-    met3.metric("Total Population", f"{int(final_gdf.get('TOT_POP_est', 0).sum()):,}")
+    
+    # Safe access to TOT_POP_est using bracket notation with fillna, avoiding .get() on gdf
+    total_pop = final_gdf['TOT_POP_est'].sum() if 'TOT_POP_est' in final_gdf.columns else 0
+    met3.metric("Total Population", f"{int(total_pop):,}")
     met4.metric("Avg IPD Score", f"{final_gdf['IPD_SCORE'].mean():.1f}")
     
     st.divider()
@@ -368,6 +379,8 @@ if st.session_state.analysis_results:
     with tab_data:
         # Display Data with Progress Bar for IPD Score
         display_cols = ['GEOID', 'IPD_SCORE', 'TOT_POP_est'] + [c for c in final_gdf.columns if '_pct' in c]
+        # Ensure cols exist
+        display_cols = [c for c in display_cols if c in final_gdf.columns]
         display_df = final_gdf[display_cols].copy()
         
         st.dataframe(
