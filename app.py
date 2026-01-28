@@ -1,4 +1,21 @@
-if not pd.isna(mean_ipd) and not pd.isna(sd_ipd) and sd_ipd > 0:
+# Collect stats
+        stats_list.append({
+            'Indicator': ind,
+            'Mean': round(mean_val, 1),
+            'SD': round(sd_val, 1),
+            'Break_Min_1.5SD': round(b1, 1),
+            'Break_Min_0.5SD': round(b2, 1),
+            'Break_Plus_0.5SD': round(b3, 1),
+            'Break_Plus_1.5SD': round(b4, 1)
+        })
+
+    # 2. Score the Composite IPD_SCORE (Comparison Logic)
+    ipd_col = 'IPD_SCORE'
+    if ipd_col in df_scored.columns:
+        mean_ipd = df_scored[ipd_col].mean()
+        sd_ipd = df_scored[ipd_col].std()
+        
+        if not pd.isna(mean_ipd) and not pd.isna(sd_ipd) and sd_ipd > 0:
             ib1 = max(0, mean_ipd - (1.5 * sd_ipd))
             ib2 = mean_ipd - (0.5 * sd_ipd)
             ib3 = mean_ipd + (0.5 * sd_ipd)
