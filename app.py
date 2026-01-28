@@ -1,13 +1,13 @@
 # Collect stats
-        stats_list.append({
-            'Indicator': ind,
-            'Mean': round(mean_val, 1),
-            'SD': round(sd_val, 1),
-            'Break_Min_1.5SD': round(b1, 1),
-            'Break_Min_0.5SD': round(b2, 1),
-            'Break_Plus_0.5SD': round(b3, 1),
-            'Break_Plus_1.5SD': round(b4, 1)
-        })
+    stats_list.append({
+        'Indicator': ind,
+        'Mean': round(mean_val, 1),
+        'SD': round(sd_val, 1),
+        'Break_Min_1.5SD': round(b1, 1),
+        'Break_Min_0.5SD': round(b2, 1),
+        'Break_Plus_0.5SD': round(b3, 1),
+        'Break_Plus_1.5SD': round(b4, 1)
+    })
 
     # 2. Score the Composite IPD_SCORE (Comparison Logic)
     ipd_col = 'IPD_SCORE'
