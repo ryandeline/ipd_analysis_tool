@@ -198,34 +198,119 @@ def process_indicators(df, active_indicators):
     return df
 
 def calculate_sd_scores(df, indicators):
+    """
+    Applies the full Standard Deviation scoring methodology.
+    Includes Row-wise Confidence check and Column-wise stats comparison.
+    """
     df_scored = df.copy()
-    df_scored['IPD_SCORE'] = 0
-    stats_list = []
     
+    # Initialize Composite Score
+    df_scored['IPD_SCORE'] = 0
+    
+    stats_list = []
+    score_cols = []
+    
+    # 1. Score Individual Indicators
     for ind in indicators:
         pct_col = f'{ind}_pct'
         if pct_col not in df.columns: continue
         
-        mean_val, sd_val = df_scored[pct_col].mean(), df_scored[pct_col].std()
+        # Calculate Stats (Mean and SD)
+        mean_val = df_scored[pct_col].mean()
+        sd_val = df_scored[pct_col].std()
         
+        # Handle zero variance or NaN
         if pd.isna(mean_val) or pd.isna(sd_val) or sd_val == 0:
             stats_list.append({'Indicator': ind, 'Mean': 0, 'SD': 0})
             df_scored[f'{ind}_score'] = 0
+            df_scored[f'{ind}_class'] = "Insufficient Data"
             continue
 
-        b1, b2, b3, b4 = max(0, mean_val - 1.5*sd_val), mean_val - 0.5*sd_val, mean_val + 0.5*sd_val, mean_val + 1.5*sd_val
-        bins = sorted(list(set([-np.inf, b1, b2, b3, b4, np.inf])))
+        # Define Breaks
+        b1 = max(0, mean_val - (1.5 * sd_val))
+        b2 = mean_val - (0.5 * sd_val)
+        b3 = mean_val + (0.5 * sd_val)
+        b4 = mean_val + (1.5 * sd_val)
         
-        if len(bins) < 6:
-            try:
-                df_scored[f'{ind}_score'] = pd.cut(df_scored[pct_col], bins=5, labels=False).fillna(0).astype(int)
-            except:
-                df_scored[f'{ind}_score'] = 0
-        else:
-             df_scored[f'{ind}_score'] = pd.cut(df_scored[pct_col], bins=bins, labels=[0, 1, 2, 3, 4], right=False).fillna(0).astype(int)
-             
-        df_scored['IPD_SCORE'] += df_scored[f'{ind}_score']
-        stats_list.append({'Indicator': ind, 'Mean': round(mean_val, 1), 'SD': round(sd_val, 1)})
+        # Assign Scores and Classes
+        def get_score_and_class(val, breaks):
+            b1, b2, b3, b4 = breaks
+            if val < b1: return 0, "Well Below Average"
+            if val < b2: return 1, "Below Average"
+            if val < b3: return 2, "Average"
+            if val < b4: return 3, "Above Average"
+            return 4, "Well Above Average"
+            
+        # Apply logic
+        results = df_scored[pct_col].apply(lambda x: get_score_and_class(x, (b1, b2, b3, b4)))
+        
+        score_col = f'{ind}_score'
+        class_col = f'{ind}_class'
+        
+        df_scored[score_col] = results.apply(lambda x: x[0]).astype(int)
+        df_scored[class_col] = results.apply(lambda x: x[1])
+        
+        # Add to composite
+        df_scored['IPD_SCORE'] += df_scored[score_col]
+        score_cols.append(score_col)
+        
+        # Collect stats
+        stats_list.append({
+            'Indicator': ind,
+            'Mean': round(mean_val, 1),
+            'SD': round(sd_val, 1),
+            'Break_Min_1.5SD': round(b1, 1),
+            'Break_Min_0.5SD': round(b2, 1),
+            'Break_Plus_0.5SD': round(b3, 1),
+            'Break_Plus_1.5SD': round(b4, 1)
+        })
+
+    # 2. Score the Composite IPD_SCORE (Comparison Logic)
+    ipd_col = 'IPD_SCORE'
+    if ipd_col in df_scored.columns:
+        mean_ipd = df_scored[ipd_col].mean()
+        sd_ipd = df_scored[ipd_col].std()
+        
+        if not pd.isna(mean_ipd) and not pd.isna(sd_ipd) and sd_ipd > 0:
+            ib1 = max(0, mean_ipd - (1.5 * sd_ipd))
+            ib2 = mean_ipd - (0.5 * sd_ipd)
+            ib3 = mean_ipd + (0.5 * sd_ipd)
+            ib4 = mean_ipd + (1.5 * sd_ipd)
+            
+            # Reuse logic for composite score classification
+            comp_results = df_scored[ipd_col].apply(lambda x: get_score_and_class(x, (ib1, ib2, ib3, ib4)))
+            df_scored['IPD_SCORE_score'] = comp_results.apply(lambda x: x[0]).astype(int)
+            df_scored['IPD_SCORE_class'] = comp_results.apply(lambda x: x[1])
+            
+            stats_list.append({
+                'Indicator': 'IPD_SCORE_COMPOSITE',
+                'Mean': round(mean_ipd, 1),
+                'SD': round(sd_ipd, 1),
+                'Break_Min_1.5SD': round(ib1, 1),
+                'Break_Min_0.5SD': round(ib2, 1),
+                'Break_Plus_0.5SD': round(ib3, 1),
+                'Break_Plus_1.5SD': round(ib4, 1)
+            })
+        
+        # 3. Confidence Check (Row-Level Consistency)
+        if score_cols:
+            df_scored['indicators_mean'] = df_scored[score_cols].mean(axis=1)
+            df_scored['indicators_std'] = df_scored[score_cols].std(axis=1)
+            
+            def get_confidence(row):
+                if row['indicators_mean'] == 0: return 'High'
+                cv = row['indicators_std'] / row['indicators_mean']
+                if cv < 0.5: return 'High'
+                elif cv < 1.0: return 'Medium'
+                else: return 'Low'
+
+            df_scored['IPD_CONFIDENCE'] = df_scored.apply(get_confidence, axis=1)
+            
+            stats_list.append({
+                'Indicator': 'ROW_WISE_CONFIDENCE',
+                'Mean': round(df_scored['indicators_mean'].mean(), 1),
+                'SD': round(df_scored['indicators_mean'].std(), 1)
+            })
         
     return df_scored, pd.DataFrame(stats_list)
 
@@ -378,7 +463,7 @@ if st.session_state.analysis_results:
 
     with tab_data:
         # Display Data with Progress Bar for IPD Score
-        display_cols = ['GEOID', 'IPD_SCORE', 'TOT_POP_est'] + [c for c in final_gdf.columns if '_pct' in c]
+        display_cols = ['GEOID', 'IPD_SCORE', 'IPD_SCORE_class', 'IPD_CONFIDENCE', 'TOT_POP_est'] + [c for c in final_gdf.columns if '_pct' in c]
         # Ensure cols exist
         display_cols = [c for c in display_cols if c in final_gdf.columns]
         display_df = final_gdf[display_cols].copy()
