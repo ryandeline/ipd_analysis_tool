@@ -207,19 +207,15 @@ def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, ge
         
     # Summation Logic
     available_est_cols = [f"{c}E" for c in count_vars if f"{c}E" in df_final.columns]
-    # FIX: Ensure at least one column exists before summing, otherwise set to 0. 
-    # For TOT_POP, this is critical.
     if available_est_cols:
         df_final[f"{indicator_code}_est"] = df_final[available_est_cols].sum(axis=1)
     else:
-        # Fallback if no estimate columns found (e.g. API returned subset)
         df_final[f"{indicator_code}_est"] = 0
     
     available_moe_cols = [f"{c}M" for c in count_vars if f"{c}M" in df_final.columns]
     df_final[f"{indicator_code}_est_moe"] = np.sqrt((df_final[available_moe_cols] ** 2).sum(axis=1)) if available_moe_cols else 0
     
     if u_var:
-        # Use simple get with default or check if column exists to avoid AttributeError on some GeoDataFrame versions
         if f"{u_var}E" in df_final.columns:
             df_final[f"{indicator_code}_uni"] = df_final[f"{u_var}E"]
         else:
@@ -520,7 +516,8 @@ if st.session_state.analysis_results:
         c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
 
         m = folium.Map(location=[final_gdf.geometry.centroid.y.mean(), final_gdf.geometry.centroid.x.mean()])
-        # Calculate bounds for auto-zoom
+        
+        # Bounds logic
         if not final_gdf.empty:
             if final_gdf.crs != 'EPSG:4326': final_gdf = final_gdf.to_crs('EPSG:4326')
             min_lon, min_lat, max_lon, max_lat = final_gdf.total_bounds
@@ -530,15 +527,34 @@ if st.session_state.analysis_results:
         map_col = 'IPD_SCORE_score' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD_SCORE'
         map_legend = 'IPD Score (0-4)' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD Score'
 
-        folium.Choropleth(
+        # --- INTERACTIVITY LOGIC ---
+        # 1. check for table selection
+        selected_geoid_from_table = None
+        if 'table_selection' in st.session_state and st.session_state.table_selection['selection']['rows']:
+             # Get the index of the selected row
+             selected_idx = st.session_state.table_selection['selection']['rows'][0]
+             # Note: Indices must align. display_df is sorted by column name below, but st.dataframe displays that.
+             # We need to construct display_df FIRST to know what row was clicked.
+             # Moving display_df logic up or ensuring consistent sort.
+             # For now, we will rely on filtered_df in the table section.
+             pass
+
+        choropleth = folium.Choropleth(
             geo_data=final_gdf.to_json(),
             data=final_gdf,
             columns=['GEOID', map_col],
             key_on='feature.properties.GEOID',
             fill_color='YlOrRd',
-            legend_name=map_legend
-        ).add_to(m)
-        st_folium(m, width="100%", height=400) # Reduced height for compactness
+            legend_name=map_legend,
+            name='IPD Scores'
+        )
+        choropleth.add_to(m)
+        
+        # Enable clicking on features
+        choropleth.geojson.add_child(folium.features.GeoJsonTooltip(fields=['GEOID', map_col], labels=True))
+        
+        # Capture map output
+        map_output = st_folium(m, width="100%", height=400, returned_objects=["last_object_clicked"])
 
     # 3. Data & Downloads (Left Column)
     with col_data:
@@ -557,7 +573,15 @@ if st.session_state.analysis_results:
             
             # Ensure cols exist
             display_cols = [c for c in display_cols if c in final_gdf.columns]
-            display_df = final_gdf[display_cols].copy()
+            
+            # --- FILTERING LOGIC ---
+            filtered_df = final_gdf[display_cols].copy()
+            
+            # Check if map was clicked
+            if map_output and map_output.get("last_object_clicked"):
+                clicked_geoid = map_output["last_object_clicked"]["properties"]["GEOID"]
+                st.info(f"Filtered by Map Selection: {clicked_geoid}")
+                filtered_df = filtered_df[filtered_df['GEOID'] == clicked_geoid]
             
             # Column config for cleaner display
             col_config = {
@@ -571,16 +595,19 @@ if st.session_state.analysis_results:
                 "TOT_POP_est": st.column_config.NumberColumn("Population", format="%d")
             }
 
-            st.dataframe(
-                display_df,
+            # Interactive Table
+            selection = st.dataframe(
+                filtered_df,
                 use_container_width=True,
                 column_config=col_config,
-                height=400 # Reduced height for compactness
+                height=400, # Reduced height for compactness
+                on_select="rerun",
+                selection_mode="single-row",
+                key="table_selection"
             )
             
         with tab_stats:
             st.dataframe(summary_stats, use_container_width=True, height=400)
-            # Removed duplicate download button here
 
 else:
     st.info("👈 Use the sidebar to configure and run the analysis.")
