@@ -583,16 +583,16 @@ if st.session_state.analysis_results:
                 "TOT_POP_est": st.column_config.NumberColumn("Population", format="%d")
             }
 
-            st.dataframe(
+            # Interactive Table
+            selection = st.dataframe(
                 display_df,
                 use_container_width=True,
                 column_config=col_config,
-                height=450 # Reduced height for compactness
+                height=450, # Reduced height for compactness
+                on_select="rerun",
+                selection_mode="single-row",
+                key="table_selection"
             )
             
-        with tab_stats:
-            st.dataframe(summary_stats, use_container_width=True, height=450)
-            st.download_button("📥 Download Stats CSV", convert_df(summary_stats), f"IPD_{selected_state_name}_Stats.csv", "text/csv")
-
-else:
-    st.info("👈 Use the sidebar to configure and run the analysis.")
+            c1, c2 = st.columns(2)
+            c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True)
