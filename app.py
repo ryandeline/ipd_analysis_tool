@@ -24,7 +24,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .block-container {
-        padding-top: 1rem; /* Reduced from 2rem */
+        padding-top: 3rem; /* Increased from 1rem to lower content */
         padding-bottom: 1rem;
         padding-left: 2rem;
         padding-right: 2rem;
@@ -38,7 +38,7 @@ st.markdown("""
     }
     /* Reduce header margins */
     h3 {
-        margin-top: 0rem;
+        margin-top: -1rem; /* Negative margin to lift bottom section up */
         padding-top: 0rem;
         font-size: 1.3rem;
     }
