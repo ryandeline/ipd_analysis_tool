@@ -452,78 +452,84 @@ if st.session_state.analysis_results:
     
     st.divider()
 
-    # 2. Main Map Visualization
-    m = folium.Map(location=[final_gdf.geometry.centroid.y.mean(), final_gdf.geometry.centroid.x.mean()])
-    # Calculate bounds for auto-zoom
-    if not final_gdf.empty:
-        if final_gdf.crs != 'EPSG:4326': final_gdf = final_gdf.to_crs('EPSG:4326')
-        min_lon, min_lat, max_lon, max_lat = final_gdf.total_bounds
-        m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
+    # Create two columns for the layout
+    col_data, col_map = st.columns([1, 1])
 
-    # Choose column for map color (Normalized if available)
-    map_col = 'IPD_SCORE_score' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD_SCORE'
-    map_legend = 'IPD Score (0-4)' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD Score'
+    # 2. Main Map Visualization (Right Column)
+    with col_map:
+        m = folium.Map(location=[final_gdf.geometry.centroid.y.mean(), final_gdf.geometry.centroid.x.mean()])
+        # Calculate bounds for auto-zoom
+        if not final_gdf.empty:
+            if final_gdf.crs != 'EPSG:4326': final_gdf = final_gdf.to_crs('EPSG:4326')
+            min_lon, min_lat, max_lon, max_lat = final_gdf.total_bounds
+            m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
 
-    folium.Choropleth(
-        geo_data=final_gdf.to_json(),
-        data=final_gdf,
-        columns=['GEOID', map_col],
-        key_on='feature.properties.GEOID',
-        fill_color='YlOrRd',
-        legend_name=map_legend
-    ).add_to(m)
-    st_folium(m, width="100%", height=500)
+        # Choose column for map color (Normalized if available)
+        map_col = 'IPD_SCORE_score' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD_SCORE'
+        map_legend = 'IPD Score (0-4)' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD Score'
 
-    # 3. Data & Downloads
-    tab_data, tab_stats = st.tabs(["📋 Detailed Data Table", "📈 Summary Statistics"])
-    
-    # Helpers
-    @st.cache_data
-    def convert_df(df): return df.to_csv(index=False).encode('utf-8')
-    
-    @st.cache_data
-    def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
+        folium.Choropleth(
+            geo_data=final_gdf.to_json(),
+            data=final_gdf,
+            columns=['GEOID', map_col],
+            key_on='feature.properties.GEOID',
+            fill_color='YlOrRd',
+            legend_name=map_legend
+        ).add_to(m)
+        st_folium(m, width="100%", height=600) # Increased height slightly for better visibility
 
-    with tab_data:
-        # Display Data with Progress Bar for IPD Score
-        # Add individual indicator scores and percents to display
-        base_cols = ['GEOID', 'IPD_SCORE_score', 'IPD_SCORE', 'IPD_SCORE_class', 'IPD_CONFIDENCE', 'TOT_POP_est']
+    # 3. Data & Downloads (Left Column)
+    with col_data:
+        tab_data, tab_stats = st.tabs(["📋 Detailed Data Table", "📈 Summary Statistics"])
         
-        # Dynamically find indicator columns (percentages and scores)
-        pct_cols = [c for c in final_gdf.columns if c.endswith('_pct')]
-        score_cols = [c for c in final_gdf.columns if c.endswith('_score') and c != 'IPD_SCORE_score']
+        # Helpers
+        @st.cache_data
+        def convert_df(df): return df.to_csv(index=False).encode('utf-8')
         
-        display_cols = base_cols + sorted(pct_cols + score_cols)
-        
-        # Ensure cols exist
-        display_cols = [c for c in display_cols if c in final_gdf.columns]
-        display_df = final_gdf[display_cols].copy()
-        
-        # Column config for cleaner display
-        col_config = {
-            "IPD_SCORE_score": st.column_config.ProgressColumn(
-                "Normalized IPD Score (0-4)",
-                help="Composite Disadvantage Score (0-4 Scale)",
-                format="%d",
-                min_value=0,
-                max_value=4,
-            ),
-            "TOT_POP_est": st.column_config.NumberColumn("Population", format="%d")
-        }
+        @st.cache_data
+        def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
 
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            column_config=col_config
-        )
-        
-        c1, c2 = st.columns(2)
-        c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True)
-        c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
+        with tab_data:
+            # Display Data with Progress Bar for IPD Score
+            # Add individual indicator scores and percents to display
+            base_cols = ['GEOID', 'IPD_SCORE_score', 'IPD_SCORE', 'IPD_SCORE_class', 'IPD_CONFIDENCE', 'TOT_POP_est']
+            
+            # Dynamically find indicator columns (percentages and scores)
+            pct_cols = [c for c in final_gdf.columns if c.endswith('_pct')]
+            score_cols = [c for c in final_gdf.columns if c.endswith('_score') and c != 'IPD_SCORE_score']
+            
+            display_cols = base_cols + sorted(pct_cols + score_cols)
+            
+            # Ensure cols exist
+            display_cols = [c for c in display_cols if c in final_gdf.columns]
+            display_df = final_gdf[display_cols].copy()
+            
+            # Column config for cleaner display
+            col_config = {
+                "IPD_SCORE_score": st.column_config.ProgressColumn(
+                    "Normalized IPD Score (0-4)",
+                    help="Composite Disadvantage Score (0-4 Scale)",
+                    format="%d",
+                    min_value=0,
+                    max_value=4,
+                ),
+                "TOT_POP_est": st.column_config.NumberColumn("Population", format="%d")
+            }
 
-    with tab_stats:
-        st.dataframe(summary_stats, use_container_width=True)
-        st.download_button("📥 Download Stats CSV", convert_df(summary_stats), f"IPD_{selected_state_name}_Stats.csv", "text/csv")
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                column_config=col_config,
+                height=500 # Match map height to prevent scrolling if possible, or keep it contained
+            )
+            
+            c1, c2 = st.columns(2)
+            c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True)
+            c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
+
+        with tab_stats:
+            st.dataframe(summary_stats, use_container_width=True, height=500)
+            st.download_button("📥 Download Stats CSV", convert_df(summary_stats), f"IPD_{selected_state_name}_Stats.csv", "text/csv")
 
 else:
     st.info("👈 Use the sidebar to configure and run the analysis.")
