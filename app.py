@@ -571,7 +571,21 @@ if st.session_state.analysis_results:
             display_cols = [c for c in display_cols if c in final_gdf.columns]
             display_df = final_gdf[display_cols].copy()
             
-            # Column config for cleaner display
+            # --- TABLE SELECTION LOGIC ---
+            # Map Click Handling
+            map_click_geoid = None
+            if st.session_state.get("map_last_click"):
+                click_data = st.session_state["map_last_click"]
+                if click_data:
+                    map_click_geoid = click_data.get("properties", {}).get("GEOID")
+
+            # Determine Table Data (Filtered by Map Click)
+            if map_click_geoid:
+                table_data = display_df[display_df['GEOID'] == map_click_geoid].copy()
+                st.caption(f"Filtered by Map Click: {map_click_geoid}")
+            else:
+                table_data = display_df.copy()
+
             col_config = {
                 "IPD_SCORE_score": st.column_config.ProgressColumn(
                     "Normalized IPD Score (0-4)",
@@ -583,16 +597,124 @@ if st.session_state.analysis_results:
                 "TOT_POP_est": st.column_config.NumberColumn("Population", format="%d")
             }
 
-            # Interactive Table
+            # Interactive Table with Multi-Selection
             selection = st.dataframe(
-                display_df,
+                table_data,
                 use_container_width=True,
                 column_config=col_config,
-                height=450, # Reduced height for compactness
+                height=450, 
                 on_select="rerun",
-                selection_mode="single-row",
+                selection_mode="multi-row",
                 key="table_selection"
             )
             
             c1, c2 = st.columns(2)
+            # Helpers
+            @st.cache_data
+            def convert_df(df): return df.to_csv(index=False).encode('utf-8')
+            @st.cache_data
+            def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
+            
             c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True)
+            c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
+
+    # 2. Main Map Visualization (Right Column) - Render SECOND to use table selection
+    with col_map:
+        # Determine Map Data
+        # If rows selected in table, filter map to those rows.
+        # Logic to determine 'active' dataset for stats and map
+        if selection.selection.rows:
+            selected_indices = selection.selection.rows
+            # Get GEOIDs from the *displayed* table data at those indices
+            selected_geoids = table_data.iloc[selected_indices]['GEOID'].tolist()
+            map_data = final_gdf[final_gdf['GEOID'].isin(selected_geoids)].copy()
+            active_df_for_stats = map_data # Stats based on selection
+        elif map_click_geoid:
+             map_data = final_gdf[final_gdf['GEOID'] == map_click_geoid].copy()
+             active_df_for_stats = map_data
+        else:
+            map_data = final_gdf.copy() # Show all if no selection
+            active_df_for_stats = final_gdf # Stats based on full data
+
+        # Map Setup
+        if not map_data.empty:
+            # Re-center map based on filtered data
+            center_lat = map_data.geometry.centroid.y.mean()
+            center_lon = map_data.geometry.centroid.x.mean()
+            m = folium.Map(location=[center_lat, center_lon])
+            
+            if map_data.crs != 'EPSG:4326': map_data = map_data.to_crs('EPSG:4326')
+            min_lon, min_lat, max_lon, max_lat = map_data.total_bounds
+            # Add padding to bounds to ensure visibility
+            m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
+        else:
+            m = folium.Map(location=[final_gdf.geometry.centroid.y.mean(), final_gdf.geometry.centroid.x.mean()])
+
+        map_col = 'IPD_SCORE_score' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD_SCORE'
+        map_legend = 'IPD Score (0-4)' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD Score'
+
+        choropleth = folium.Choropleth(
+            geo_data=map_data.to_json(),
+            data=map_data,
+            columns=['GEOID', map_col],
+            key_on='feature.properties.GEOID',
+            fill_color='YlOrRd',
+            legend_name=map_legend,
+            name='IPD Scores'
+        )
+        choropleth.add_to(m)
+        choropleth.geojson.add_child(folium.features.GeoJsonTooltip(fields=['GEOID', map_col], labels=True))
+        
+        # Render Map
+        st_folium(m, width="100%", height=450, key="map_last_click", returned_objects=["last_object_clicked"])
+
+    # Recalculate Summary Stats for the Active Selection
+    with tab_stats:
+        # We need to re-generate the stats dictionary based on active_df_for_stats
+        # This mirrors the logic in calculate_sd_scores but for the current subset
+        if not active_df_for_stats.empty:
+            subset_stats = []
+            indicators = [c.replace('_pct', '') for c in active_df_for_stats.columns if c.endswith('_pct')]
+            
+            for ind in indicators:
+                pct_col = f'{ind}_pct'
+                mean_val = active_df_for_stats[pct_col].mean()
+                sd_val = active_df_for_stats[pct_col].std()
+                subset_stats.append({
+                    'Indicator': ind,
+                    'Mean': round(mean_val, 1) if not pd.isna(mean_val) else 0,
+                    'SD': round(sd_val, 1) if not pd.isna(sd_val) else 0
+                })
+            
+            # Composite stats
+            if 'IPD_SCORE' in active_df_for_stats.columns:
+                 mean_ipd = active_df_for_stats['IPD_SCORE'].mean()
+                 sd_ipd = active_df_for_stats['IPD_SCORE'].std()
+                 subset_stats.append({
+                    'Indicator': 'IPD_SCORE_COMPOSITE',
+                    'Mean': round(mean_ipd, 1) if not pd.isna(mean_ipd) else 0,
+                    'SD': round(sd_ipd, 1) if not pd.isna(sd_ipd) else 0
+                })
+            
+            stats_df = pd.DataFrame(subset_stats)
+            st.dataframe(stats_df, use_container_width=True, height=450)
+            st.download_button("📥 Download Stats CSV", convert_df(stats_df), f"IPD_{selected_state_name}_Stats_Subset.csv", "text/csv")
+        else:
+            st.write("No data selected.")
+
+    # 4. Update Header Metrics (Dynamic)
+    with metrics_container:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Geographic Level", geo_level.title())
+        m2.metric("Selected Units", f"{len(active_df_for_stats):,}")
+        
+        pop = active_df_for_stats['TOT_POP_est'].sum() if 'TOT_POP_est' in active_df_for_stats.columns else 0
+        m3.metric("Population (Selected)", f"{int(pop):,}")
+        
+        if 'IPD_SCORE_score' in active_df_for_stats.columns:
+            avg = active_df_for_stats['IPD_SCORE_score'].mean()
+            m4.metric("Avg Score (Selected)", f"{avg:.2f}" if not pd.isna(avg) else "0.0")
+        else:
+            m4.metric("Avg Score", f"{active_df_for_stats['IPD_SCORE'].mean():.1f}")
+
+else:
