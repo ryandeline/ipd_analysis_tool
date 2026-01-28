@@ -19,14 +19,32 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS to reduce padding
+# Custom CSS to reduce padding and adjust font sizes for compactness
 st.markdown("""
 <style>
     .block-container {
-        padding-top: 1rem;
-        padding-bottom: 0rem;
-        padding-left: 5rem;
-        padding-right: 5rem;
+        padding-top: 2rem;
+        padding-bottom: 1rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
+    }
+    /* Reduce size of metric labels and values */
+    [data-testid="stMetricLabel"] {
+        font-size: 0.9rem !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.2rem !important;
+    }
+    /* Reduce header margins */
+    h3 {
+        margin-top: 0rem;
+        padding-top: 0rem;
+        font-size: 1.3rem;
+    }
+    /* Compact divider */
+    hr {
+        margin-top: 0.5rem;
+        margin-bottom: 0.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -488,7 +506,7 @@ if st.session_state.analysis_results:
             fill_color='YlOrRd',
             legend_name=map_legend
         ).add_to(m)
-        st_folium(m, width="100%", height=600) # Increased height slightly for better visibility
+        st_folium(m, width="100%", height=450) # Reduced height for compactness
 
     # 3. Data & Downloads (Left Column)
     with col_data:
@@ -532,7 +550,7 @@ if st.session_state.analysis_results:
                 display_df,
                 use_container_width=True,
                 column_config=col_config,
-                height=500 # Match map height to prevent scrolling if possible, or keep it contained
+                height=450 # Reduced height for compactness
             )
             
             c1, c2 = st.columns(2)
@@ -540,7 +558,7 @@ if st.session_state.analysis_results:
             c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
 
         with tab_stats:
-            st.dataframe(summary_stats, use_container_width=True, height=500)
+            st.dataframe(summary_stats, use_container_width=True, height=450)
             st.download_button("📥 Download Stats CSV", convert_df(summary_stats), f"IPD_{selected_state_name}_Stats.csv", "text/csv")
 
 else:
