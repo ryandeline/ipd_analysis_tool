@@ -47,14 +47,14 @@ st.markdown("""
         margin-top: 0.5rem;
         margin-bottom: 0.5rem;
     }
-    /* Center the toast/status messages vertically */
+    /* Center the toast/status messages vertically, moved lower to 60% */
     div[data-testid="stStatusWidget"] {
         position: fixed;
-        top: 50%;
+        top: 60%;
         left: 50%;
         transform: translate(-50%, -50%);
         z-index: 9999;
-        width: 300px; /* Fixed width for better appearance */
+        width: 400px; /* Wider for descriptive text */
     }
 </style>
 """, unsafe_allow_html=True)
@@ -371,14 +371,21 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     total_steps = len(active_inds) + 3 # +1 for TOT_POP
     
     # 1. Fetch TOT_POP first
-    status.write("Fetching Indicator: TOT_POP...")
+    status.write(f"Fetching Indicator: TOT_POP (1/{total_steps})")
     df_pop = fetch_single_indicator('TOT_POP', VARIABLES['TOT_POP'], year, state_fips, counties, geo_level, api_key)
     if not df_pop.empty:
         indicator_dfs.append(df_pop)
     
     # 2. Fetch other indicators
     for i, ind_code in enumerate(active_inds):
-        status.write(f"Fetching Indicator: {ind_code}...")
+        codes = VARIABLES[ind_code]
+        desc = "Fetching"
+        if isinstance(codes.get('count'), list):
+            desc = "Summing tables for"
+        elif codes.get('interpolate'):
+            desc = "Interpolating tract data for"
+            
+        status.write(f"{desc} Indicator: {ind_code} ({i+2}/{total_steps})")
         df_ind = fetch_single_indicator(ind_code, VARIABLES[ind_code], year, state_fips, counties, geo_level, api_key)
         if not df_ind.empty: indicator_dfs.append(df_ind)
 
@@ -421,10 +428,11 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     else:
         df_master['GEOID'] = df_master['state'] + df_master['county'] + df_master['tract'] + df_master['block group']
 
-    status.write("Calculating scores & geometry...")
+    status.write("Calculating standard deviation scores (Mean ± 1.5 SD)...")
     df_master = process_indicators(df_master, active_inds)
     full_df_scored, summary_stats = calculate_sd_scores(df_master, active_inds)
 
+    status.write("Applying geometry & final composite score...")
     gdf_geom = get_census_geometry(year, state_fips, geo_level)
     if counties: gdf_geom = gdf_geom[gdf_geom['GEOID'].str[2:5].isin(counties)]
     
@@ -506,7 +514,7 @@ if st.session_state.analysis_results:
         @st.cache_data
         def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
 
-        # Download Buttons (Placed above map)
+        # Download Buttons (Placed above map) - Single Set
         c1, c2 = st.columns(2)
         c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True)
         c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
@@ -572,7 +580,7 @@ if st.session_state.analysis_results:
             
         with tab_stats:
             st.dataframe(summary_stats, use_container_width=True, height=450)
-            st.download_button("📥 Download Stats CSV", convert_df(summary_stats), f"IPD_{selected_state_name}_Stats.csv", "text/csv")
+            # Removed duplicate download button here
 
 else:
     st.info("👈 Use the sidebar to configure and run the analysis.")
