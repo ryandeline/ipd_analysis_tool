@@ -24,7 +24,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .block-container {
-        padding-top: 1rem; /* Reduced from 2rem */
+        padding-top: 4rem; /* Increased from 3rem to lower content further */
         padding-bottom: 1rem;
         padding-left: 2rem;
         padding-right: 2rem;
@@ -38,7 +38,7 @@ st.markdown("""
     }
     /* Reduce header margins */
     h3 {
-        margin-top: 0rem;
+        margin-top: -2rem; /* Negative margin to lift bottom section up */
         padding-top: 0rem;
         font-size: 1.3rem;
     }
@@ -542,16 +542,6 @@ if st.session_state.analysis_results:
                 key="table_selection"
             )
             
-            c1, c2 = st.columns(2)
-            # Helpers
-            @st.cache_data
-            def convert_df(df): return df.to_csv(index=False).encode('utf-8')
-            @st.cache_data
-            def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
-            
-            c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True, key="btn_geojson")
-            c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True, key="btn_csv")
-
     # 2. Main Map Visualization (Right Column) - Render SECOND to use table selection
     with col_map:
         # Determine Map Data
@@ -569,6 +559,17 @@ if st.session_state.analysis_results:
         else:
             map_data = final_gdf.copy() # Show all if no selection
             active_df_for_stats = final_gdf # Stats based on full data
+
+        # Helpers
+        @st.cache_data
+        def convert_df(df): return df.to_csv(index=False).encode('utf-8')
+        @st.cache_data
+        def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
+        
+        # Download Buttons (Placed above map) - Single Set
+        c1, c2 = st.columns(2)
+        c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True, key="btn_geojson")
+        c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True, key="btn_csv")
 
         # Map Setup
         if not map_data.empty:
