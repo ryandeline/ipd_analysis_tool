@@ -10,6 +10,7 @@ import io
 import folium
 from streamlit_folium import st_folium
 from functools import reduce
+import time
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -45,6 +46,10 @@ st.markdown("""
     hr {
         margin-top: 0.5rem;
         margin-bottom: 0.5rem;
+    }
+    /* Center the toast/status messages vertically */
+    .stStatusWidget {
+        top: 50% !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -209,6 +214,7 @@ def fetch_single_indicator(indicator_code, codes, year, state_fips, counties, ge
     df_final[f"{indicator_code}_est_moe"] = np.sqrt((df_final[available_moe_cols] ** 2).sum(axis=1)) if available_moe_cols else 0
     
     if u_var:
+        # Use simple get with default or check if column exists to avoid AttributeError on some GeoDataFrame versions
         if f"{u_var}E" in df_final.columns:
             df_final[f"{indicator_code}_uni"] = df_final[f"{u_var}E"]
         else:
@@ -419,6 +425,7 @@ def run_analysis(api_key, state_fips, state_name, counties, year, geo_level):
     
     final_gdf = gdf_geom.merge(full_df_scored, on='GEOID', how='inner')
     status.update(label="Analysis Complete!", state="complete", expanded=False)
+    time.sleep(2) # Give user a moment to see completion
     return final_gdf, summary_stats
 
 # --- UI Layout ---
@@ -487,6 +494,18 @@ if st.session_state.analysis_results:
 
     # 2. Main Map Visualization (Right Column)
     with col_map:
+        # Helpers
+        @st.cache_data
+        def convert_df(df): return df.to_csv(index=False).encode('utf-8')
+        
+        @st.cache_data
+        def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
+
+        # Download Buttons (Placed above map)
+        c1, c2 = st.columns(2)
+        c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True)
+        c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
+
         m = folium.Map(location=[final_gdf.geometry.centroid.y.mean(), final_gdf.geometry.centroid.x.mean()])
         # Calculate bounds for auto-zoom
         if not final_gdf.empty:
@@ -512,13 +531,6 @@ if st.session_state.analysis_results:
     with col_data:
         tab_data, tab_stats = st.tabs(["📋 Detailed Data Table", "📈 Summary Statistics"])
         
-        # Helpers
-        @st.cache_data
-        def convert_df(df): return df.to_csv(index=False).encode('utf-8')
-        
-        @st.cache_data
-        def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
-
         with tab_data:
             # Display Data with Progress Bar for IPD Score
             # Add individual indicator scores and percents to display
@@ -553,10 +565,6 @@ if st.session_state.analysis_results:
                 height=450 # Reduced height for compactness
             )
             
-            c1, c2 = st.columns(2)
-            c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True)
-            c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
-
         with tab_stats:
             st.dataframe(summary_stats, use_container_width=True, height=450)
             st.download_button("📥 Download Stats CSV", convert_df(summary_stats), f"IPD_{selected_state_name}_Stats.csv", "text/csv")
