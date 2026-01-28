@@ -24,7 +24,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .block-container {
-        padding-top: 3rem; /* Increased from 1rem to lower content */
+        padding-top: 1rem; /* Reduced from 2rem */
         padding-bottom: 1rem;
         padding-left: 2rem;
         padding-right: 2rem;
@@ -38,7 +38,7 @@ st.markdown("""
     }
     /* Reduce header margins */
     h3 {
-        margin-top: -1rem; /* Negative margin to lift bottom section up */
+        margin-top: 0rem;
         padding-top: 0rem;
         font-size: 1.3rem;
     }
@@ -483,92 +483,26 @@ if run_btn:
 if st.session_state.analysis_results:
     final_gdf, summary_stats = st.session_state.analysis_results
     
-    # 1. Header Metrics
-    st.markdown(f"### 📊 Results for {selected_state_name}")
-    met1, met2, met3, met4 = st.columns(4)
-    met1.metric("Geographic Level", geo_level.title())
-    met2.metric("Total Units Analyzed", f"{len(final_gdf):,}")
-    
-    # Safe access to TOT_POP_est using bracket notation with fillna
-    total_pop = final_gdf['TOT_POP_est'].sum() if 'TOT_POP_est' in final_gdf.columns else 0
-    met3.metric("Total Population", f"{int(total_pop):,}")
-    
-    # Display the Normalized Score Average if available, else raw
-    if 'IPD_SCORE_score' in final_gdf.columns:
-        avg_score = final_gdf['IPD_SCORE_score'].mean()
-        met4.metric("Avg IPD Score (0-4)", f"{avg_score:.2f}")
-    else:
-        met4.metric("Avg IPD Score", f"{final_gdf['IPD_SCORE'].mean():.1f}")
-    
+    # 1. Header Metrics - Dynamic calculation based on selection (if filtering is active later)
+    metrics_container = st.container() # Placeholder at top
+
     st.divider()
 
     # Create two columns for the layout
     col_data, col_map = st.columns([1, 1])
 
-    # 2. Main Map Visualization (Right Column) - Render SECOND to use table selection
-    with col_map:
-        # Helpers
-        @st.cache_data
-        def convert_df(df): return df.to_csv(index=False).encode('utf-8')
-        
-        @st.cache_data
-        def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
-
-        # Download Buttons (Placed above map) - Single Set
-        c1, c2 = st.columns(2)
-        c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True)
-        c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
-
-        # Map Setup
-        if not final_gdf.empty:
-            # Re-center map based on filtered data
-            center_lat = final_gdf.geometry.centroid.y.mean()
-            center_lon = final_gdf.geometry.centroid.x.mean()
-            m = folium.Map(location=[center_lat, center_lon])
-            
-            if final_gdf.crs != 'EPSG:4326': final_gdf = final_gdf.to_crs('EPSG:4326')
-            min_lon, min_lat, max_lon, max_lat = final_gdf.total_bounds
-            # Add padding to bounds to ensure visibility
-            m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
-        else:
-            m = folium.Map(location=[final_gdf.geometry.centroid.y.mean(), final_gdf.geometry.centroid.x.mean()])
-
-        map_col = 'IPD_SCORE_score' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD_SCORE'
-        map_legend = 'IPD Score (0-4)' if 'IPD_SCORE_score' in final_gdf.columns else 'IPD Score'
-
-        choropleth = folium.Choropleth(
-            geo_data=final_gdf.to_json(),
-            data=final_gdf,
-            columns=['GEOID', map_col],
-            key_on='feature.properties.GEOID',
-            fill_color='YlOrRd',
-            legend_name=map_legend,
-            name='IPD Scores'
-        )
-        choropleth.add_to(m)
-        choropleth.geojson.add_child(folium.features.GeoJsonTooltip(fields=['GEOID', map_col], labels=True))
-        
-        # Render Map
-        # Note: 'key' argument is important to distinguish this instance
-        st_folium(m, width="100%", height=450, key="map_last_click", returned_objects=["last_object_clicked"])
-
-    # 3. Data & Downloads (Left Column)
+    # 3. Data Table (Left Column) - Render FIRST to get selection state
     with col_data:
         tab_data, tab_stats = st.tabs(["📋 Detailed Data Table", "📈 Summary Statistics"])
         
         with tab_data:
             # Display Data with Progress Bar for IPD Score
-            # Add individual indicator scores and percents to display
             base_cols = ['GEOID', 'IPD_SCORE_score', 'IPD_SCORE', 'IPD_SCORE_class', 'IPD_CONFIDENCE', 'TOT_POP_est']
-            
-            # Dynamically find indicator columns (percentages and scores)
             pct_cols = [c for c in final_gdf.columns if c.endswith('_pct')]
             score_cols = [c for c in final_gdf.columns if c.endswith('_score') and c != 'IPD_SCORE_score']
-            
             display_cols = base_cols + sorted(pct_cols + score_cols)
-            
-            # Ensure cols exist
             display_cols = [c for c in display_cols if c in final_gdf.columns]
+            
             display_df = final_gdf[display_cols].copy()
             
             # --- TABLE SELECTION LOGIC ---
@@ -615,8 +549,8 @@ if st.session_state.analysis_results:
             @st.cache_data
             def convert_gdf_to_geojson(_gdf): return _gdf.to_json()
             
-            c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True)
-            c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True)
+            c1.download_button("📥 Download GeoJSON (Map)", convert_gdf_to_geojson(final_gdf), f"IPD_{selected_state_name}_Map.geojson", "application/json", use_container_width=True, key="btn_geojson")
+            c2.download_button("📥 Download CSV (Data)", convert_df(final_gdf.drop(columns='geometry')), f"IPD_{selected_state_name}_Data.csv", "text/csv", use_container_width=True, key="btn_csv")
 
     # 2. Main Map Visualization (Right Column) - Render SECOND to use table selection
     with col_map:
@@ -698,7 +632,7 @@ if st.session_state.analysis_results:
             
             stats_df = pd.DataFrame(subset_stats)
             st.dataframe(stats_df, use_container_width=True, height=450)
-            st.download_button("📥 Download Stats CSV", convert_df(stats_df), f"IPD_{selected_state_name}_Stats_Subset.csv", "text/csv")
+            st.download_button("📥 Download Stats CSV", convert_df(stats_df), f"IPD_{selected_state_name}_Stats_Subset.csv", "text/csv", key="btn_stats")
         else:
             st.write("No data selected.")
 
@@ -716,3 +650,6 @@ if st.session_state.analysis_results:
             m4.metric("Avg Score (Selected)", f"{avg:.2f}" if not pd.isna(avg) else "0.0")
         else:
             m4.metric("Avg Score", f"{active_df_for_stats['IPD_SCORE'].mean():.1f}")
+
+else:
+    st.info("👈 Use the sidebar to configure and run the analysis.")
